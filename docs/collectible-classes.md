@@ -1,5 +1,11 @@
 # Collectible class paths — to verify against a real install
 
+> **Update (toolchain acquired):** most of this is now verified — see
+> [`FINDINGS.md`](FINDINGS.md) for the real paths, descriptors and the decision to
+> categorise by **item descriptor** (`AFGItemPickup::GetPickupItemClass()`) rather than
+> actor class path, plus the `AFGScannableSubsystem` registry that replaces the actor
+> sweep. The design notes below are kept for context.
+
 The mod maps a spawned actor to a collectible category by walking its class hierarchy
 against a table (`UVTCOutlineSubsystem::LoadClassCategoryTable`). The default entries below
 are **best-effort guesses** and must be checked against the game version you build against —
