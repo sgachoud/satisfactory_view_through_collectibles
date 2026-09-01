@@ -1,0 +1,11 @@
+# Unreal Engine / SML build artifacts (only relevant once symlinked into a SatisfactoryModLoader checkout)
+Binaries/
+Intermediate/
+Saved/
+DerivedDataCache/
+*.sln
+.vs/
+
+# Python
+__pycache__/
+*.pyc

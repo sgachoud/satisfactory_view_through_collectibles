@@ -1,0 +1,31 @@
+{
+  "FileVersion": 3,
+  "Version": 1,
+  "VersionName": "0.1.0",
+  "SemVersion": "0.1.0",
+  "FriendlyName": "View Through Collectibles",
+  "Description": "Draws a configurable outline on world collectibles (hard drive drop pods, power slugs, Mercer Spheres, Somersloops, collectible flora) and dropped items, visible through grass, buildings and terrain within a chosen distance. Client-side and cosmetic only; multiplayer safe.",
+  "Category": "Modding",
+  "CreatedBy": "",
+  "CreatedByURL": "",
+  "DocsURL": "",
+  "MarketplaceURL": "",
+  "SupportURL": "",
+  "EnabledByDefault": true,
+  "CanContainContent": true,
+  "IsBetaVersion": true,
+  "Installed": false,
+  "Modules": [
+    {
+      "Name": "ViewThroughCollectibles",
+      "Type": "Runtime",
+      "LoadingPhase": "Default"
+    }
+  ],
+  "Plugins": [
+    {
+      "Name": "SML",
+      "Enabled": true
+    }
+  ]
+}
