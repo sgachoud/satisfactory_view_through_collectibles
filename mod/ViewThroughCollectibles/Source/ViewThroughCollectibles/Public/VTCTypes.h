@@ -28,21 +28,28 @@ enum class EVTCCollectibleCategory : uint8
 	MAX             = 10 UMETA(Hidden)
 };
 
-/** Per-category settings block shown in the mod config menu. */
+/**
+ * Per-category settings block. Field names match the keys inside each Section of the SML
+ * ModConfiguration (`Enabled`, `Color`) so UConfigManager::FillConfigurationStruct binds
+ * them by reflection.
+ */
 USTRUCT(BlueprintType)
 struct FVTCTypeSettings
 {
 	GENERATED_BODY()
 
 	FVTCTypeSettings() = default;
-	FVTCTypeSettings(bool bInEnabled, const FLinearColor& InColor)
-		: bEnabled(bInEnabled), Color(InColor) {}
+	FVTCTypeSettings(bool bInEnabled, const FString& InColorHex)
+		: Enabled(bInEnabled), Color(InColorHex) {}
 
 	/** Whether this collectible family is outlined at all. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "View Through Collectibles")
-	bool bEnabled = true;
+	bool Enabled = true;
 
-	/** Outline colour for this family. Alpha is used as the through-wall fill strength. */
+	/** Outline colour as a hex string, "RRGGBB" or "RRGGBBAA" (with or without a leading #). */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "View Through Collectibles")
-	FLinearColor Color = FLinearColor(1.f, 0.15f, 0.1f, 1.f);
+	FString Color = TEXT("FFFFFF");
+
+	/** Parsed colour. Falls back to white on an unparseable string. Alpha defaults to 1. */
+	FLinearColor GetLinearColor() const;
 };

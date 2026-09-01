@@ -4,10 +4,21 @@
 #include "Engine/World.h"
 #include "Engine/GameInstance.h"
 
-// SML configuration runtime.
-// TODO(verify against SML 3.12): include path + FillConfigurationStruct signature. If the
-// in-editor Configuration Tool generates its own GetActiveConfig(), prefer that body.
 #include "Configuration/ConfigManager.h"     // also pulls FConfigId (ModConfiguration.h) + FDynamicStructInfo (ReflectionHelper.h)
+
+FLinearColor FVTCTypeSettings::GetLinearColor() const
+{
+	FString Hex = Color;
+	Hex.TrimStartAndEndInline();
+	Hex.RemoveFromStart(TEXT("#"));
+	if (Hex.IsEmpty())
+	{
+		return FLinearColor::White;
+	}
+	// FColor::FromHex handles RGB / RRGGBB / RRGGBBAA. It defaults alpha to 255 for 6-digit.
+	const FColor SRGB = FColor::FromHex(Hex);
+	return FLinearColor(SRGB);
+}
 
 const FVTCTypeSettings& FVTCConfigStruct::GetFor(EVTCCollectibleCategory Category) const
 {
@@ -45,7 +56,6 @@ FVTCConfigStruct FVTCConfigStruct::GetActiveConfig(const UObject* WorldContext)
 		return Config; // defaults
 	}
 
-	// Root config id: { modReference, "" }. modReference must match the .uplugin name.
 	const FConfigId ConfigId{ TEXT("ViewThroughCollectibles"), TEXT("") };
 	ConfigManager->FillConfigurationStruct(
 		ConfigId,

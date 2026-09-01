@@ -150,7 +150,7 @@ void UVTCOutlineSubsystem::PushConfigToMaterial(const FVTCConfigStruct& Cfg)
 		{
 			const FVTCTypeSettings& A = Cfg.GetFor(static_cast<EVTCCollectibleCategory>(i));
 			const FVTCTypeSettings& B = LastPushedConfig.GetFor(static_cast<EVTCCollectibleCategory>(i));
-			bChanged = A.bEnabled != B.bEnabled || !A.Color.Equals(B.Color);
+			bChanged = A.Enabled != B.Enabled || !A.Color.Equals(B.Color, ESearchCase::IgnoreCase);
 		}
 		if (!bChanged)
 		{
@@ -163,8 +163,8 @@ void UVTCOutlineSubsystem::PushConfigToMaterial(const FVTCConfigStruct& Cfg)
 		const FVTCTypeSettings& T = Cfg.GetFor(static_cast<EVTCCollectibleCategory>(i));
 		// Colour param "Color<stencil>" so the material can index by stencil value directly.
 		const FName ParamName(*FString::Printf(TEXT("Color%d"), StencilFor(static_cast<EVTCCollectibleCategory>(i))));
-		FLinearColor Value = T.Color;
-		Value.A = T.bEnabled ? T.Color.A : 0.f; // alpha 0 => material draws nothing for this stencil
+		FLinearColor Value = T.GetLinearColor();
+		Value.A = T.Enabled ? 1.f : 0.f; // alpha 0 => material draws nothing for this stencil
 		UKismetMaterialLibrary::SetVectorParameterValue(this, ColorCollection, ParamName, Value);
 	}
 
@@ -229,7 +229,7 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 		{
 			return;
 		}
-		if (!Cfg.GetFor(Category).bEnabled)
+		if (!Cfg.GetFor(Category).Enabled)
 		{
 			return;
 		}
