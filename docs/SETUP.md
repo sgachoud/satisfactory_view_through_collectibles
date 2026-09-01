@@ -62,38 +62,39 @@ The `.uplugin` and source files in `mod/ViewThroughCollectibles/` of this repo a
 **intended end state**. The clean way to get there is to let Alpakit scaffold the plugin,
 then copy this repo's `Source/` over the generated one.
 
+Paths here use this machine: SML at `F:\dev\satisfactory_mods\SatisfactoryModLoader`, this
+repo at `F:\dev\satisfactory_mods\view_throught_collectibles`.
+
 1. In the editor: **Window → Alpakit Dev** (dock it somewhere).
-2. **Create Mod** → template **"C++ and Blueprint"** → Mod Name: `ViewThroughCollectibles`
+2. **Create Mod** → template **"C++ & Blueprint"** → Mod Name: `ViewThroughCollectibles`
    → leave *Show Content Directory* checked → **Create Mod**.
-   This creates `D:/SML/Mods/ViewThroughCollectibles/` with a `.uplugin`, a `Source/`
-   folder, a module class, and a `Content/` folder.
+   This generates `…\SatisfactoryModLoader\Mods\ViewThroughCollectibles\` with:
+   `ViewThroughCollectibles.uplugin`, `Config/`, `Content/`, and
+   `Source\ViewThroughCollectibles\` containing `ViewThroughCollectibles.Build.cs`,
+   `Public\ViewThroughCollectibles.h`, `Private\ViewThroughCollectibles.cpp` (the module
+   class — `IMPLEMENT_MODULE`, keep it).
 3. Close the editor.
-4. Replace the generated source with this repo's:
-   - Copy `mod/ViewThroughCollectibles/Source/ViewThroughCollectibles/Public/*` and
-     `.../Private/*` from **this repo** into
-     `D:/SML/Mods/ViewThroughCollectibles/Source/ViewThroughCollectibles/`.
-   - Merge `Build.cs`: make sure `PublicDependencyModuleNames` contains at least
-     `Core, CoreUObject, Engine, DeveloperSettings, SML, FactoryGame` (this repo's
-     `ViewThroughCollectibles.Build.cs` is the reference).
-   - If Alpakit's template made its own `…Module.cpp`, keep **one** module
-     implementation. This repo ships a minimal
-     `ViewThroughCollectiblesModule.cpp` using `IMPLEMENT_GAME_MODULE`; if you keep
-     Alpakit's `IMPLEMENT_MODULE` version instead, delete this repo's file. Don't have both.
-   - Merge the `.uplugin`: it must have the `Modules` array (one `Runtime` module named
-     `ViewThroughCollectibles`, `LoadingPhase: Default`), `"Plugins": [{ "Name": "SML",
-     "Enabled": true }]`, and `"CanContainContent": true`. This repo's `.uplugin` is the
-     reference.
-   > Tip: instead of copying, make `D:/SML/Mods/ViewThroughCollectibles` a directory
-   > symlink to this repo's `mod/ViewThroughCollectibles` so edits stay in git:
-   > `mklink /D D:\SML\Mods\ViewThroughCollectibles F:\dev\satisfactory_mods\view_throught_collectibles\mod\ViewThroughCollectibles`
-   > (then still reconcile `.uplugin` / module as above).
-5. Regenerate VS project files (right-click `FactoryGame.uproject`).
-6. Build **Development Editor / Win64 / FactoryGame** again (editor closed).
-7. Open the editor. Under *Plugins* content (enable *Show Plugin Content*) you should see
+4. Add this mod's code — copy these 5 files from this repo into the generated
+   `Source\ViewThroughCollectibles\` (**keep** the generated module `.h`/`.cpp` and
+   `.Build.cs`):
+   - `Public\VTCTypes.h`, `Public\VTCConfig.h`, `Public\VTCOutlineSubsystem.h`
+   - `Private\VTCConfig.cpp`, `Private\VTCOutlineSubsystem.cpp`
+   The generated `.Build.cs` already lists `Engine, DeveloperSettings, RenderCore,
+   DummyHeaders, FactoryGame, SML` — nothing to merge. (This repo's copies of `.Build.cs`
+   / `.uplugin` are just reference; the generated ones win.)
+   > Or symlink so edits stay in git — but only the module folder, not over the generated
+   > `.uplugin`/`Config`/`Content`:
+   > `mklink /D "…\SatisfactoryModLoader\Mods\ViewThroughCollectibles\Source\ViewThroughCollectibles" "…\view_throught_collectibles\mod\ViewThroughCollectibles\Source\ViewThroughCollectibles"`
+   > (do this *instead of* letting Alpakit generate the Source folder, then hand-add the
+   > module `.h`/`.cpp` — fiddly; copying is simpler.)
+5. Confirm the generated `.uplugin` has `"CanContainContent": true` and a `SML` entry under
+   `"Plugins"` (Alpakit's game-feature template sets both).
+6. Regenerate VS project files (right-click `FactoryGame.uproject`) and build the
+   **FactoryEditor / Development / Win64** target with the editor closed.
+7. Open the editor. With *Show Plugin Content* on, you should see
    **ViewThroughCollectibles Content**.
 
-At this point `RefreshOutlines()` etc. compile. Expect to fix a few
-`TODO(needs FactoryGame source access)` spots — see Phase E.
+The C++ compiles at this point. Then build the assets (Phase D) and fix the Phase E items.
 
 ---
 
