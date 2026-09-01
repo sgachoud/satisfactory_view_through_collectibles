@@ -53,82 +53,78 @@ category (the material treats alpha 0 as "draw nothing"), and `A = colour alpha`
 
 ## 2. `M_VTCOutline` — Post Process material
 
-Right-click → **Material**. In **Details**:
+Right-click → **Material**. Name it `M_VTCOutline`. In **Details**:
 
 - **Material Domain**: `Post Process`
 - **Blendable Location**: `After Tonemapping` (predictable colour; try `Before Tonemapping`
   if you want it to bloom)
+- **Blendable Priority**: leave 0
 - **Output Alpha**: unchecked (we write Emissive only)
 
-Add one **Collection Parameter** node pointing at `MPC_VTCColors` (gives you all the params).
+Nodes to place:
 
-Add a **Scene Texture** node with **Id = PostProcessInput0** somewhere in the graph (even
-unused) — this makes `SceneTextureLookup` available inside the Custom node below.
+1. **Collection Parameter** node → set **Collection** = `MPC_VTCColors`. From it you can drag
+   each parameter out (`OutlineThicknessPixels`, `OccludedFillOpacity`, `Color201`…`Color210`).
+2. **Scene Texture** node → **Id = `PostProcessInput0`**. Its presence is what makes
+   `SceneTextureLookup` compile inside the Custom node; wire its **Color** (RGB) into the
+   Custom node's `SceneColor` input so it isn't dead-stripped.
+3. **Custom** node — **Output Type = `CT_Float3`**, output → **Emissive Color**.
 
-Then add a **Custom** node, set **Output Type = CT_Float3**, and wire its output into
-**Emissive Color**. Give it these inputs:
+Custom node **inputs** (Name → wire):
 
 | Input pin | Wire from |
 |---|---|
-| `UV` | `TexCoord[0]` (or `ScreenPosition` → `ViewportUV`) |
-| `Thickness` | MPC scalar `OutlineThicknessPixels` |
-| `FillOpacity` | MPC scalar `OccludedFillOpacity` |
-| `C201`..`C210` | the 10 MPC vector params (RGBA → float4 each) |
+| `UV` | `ScreenPosition` node → **ViewportUV** output (or `TexCoord[0]`) |
+| `SceneColor` | Scene Texture (PostProcessInput0) → **Color** (take RGB) |
+| `Thickness` | Collection Param `OutlineThicknessPixels` |
+| `FillOpacity` | Collection Param `OccludedFillOpacity` |
+| `C201` … `C210` | the 10 Collection Param `Color2xx` (each a float4) |
 
-Custom node **Code**:
+Custom node **Code** (verified against this engine's `MaterialTemplate.ush`):
 
 ```hlsl
-// Screen-space texel size
-float2 texel = View.ViewSizeAndInvSize.zw;
-float2 o = texel * max(Thickness, 0.5);
+// Screen-space texel size (viewport). Use ResolvedView if View gives artifacts.
+float2 o = View.ViewSizeAndInvSize.zw * max(Thickness, 0.5);
 
-// Custom Stencil at center + 4 neighbours
-#define STEN(uv) (SceneTextureLookup(uv, 25, false).r * 255.0 + 0.5)
+// CustomStencil (id 25) returns the raw stencil integer in .r (e.g. 201.0), not normalised.
+#define STEN(uv) (SceneTextureLookup(uv, 25, false).r)
 float sC = STEN(UV);
 float sL = STEN(UV + float2(-o.x, 0));
 float sR = STEN(UV + float2( o.x, 0));
 float sU = STEN(UV + float2(0, -o.y));
 float sD = STEN(UV + float2(0,  o.y));
 
-// Is a stencil value one of ours? (201..210)
-#define OURS(s) ((s) >= 200.5 && (s) <= 210.5)
+// Ours = stencil 201..210
+#define OURS(s) ((s) > 200.5 && (s) < 210.5)
 
-// The category stencil for this pixel: prefer the center, else the first neighbour that is ours
-float v = OURS(sC) ? sC :
-          OURS(sL) ? sL :
-          OURS(sR) ? sR :
-          OURS(sU) ? sU :
-          OURS(sD) ? sD : 0.0;
-if (v < 200.5) return SceneTextureLookup(UV, 14, false).rgb; // PostProcessInput0, unchanged
+float v = OURS(sC) ? sC : OURS(sL) ? sL : OURS(sR) ? sR : OURS(sU) ? sU : OURS(sD) ? sD : 0.0;
+if (v < 200.5) return SceneColor;
 
-// Pick the colour for this category
-float4 col;
-int iv = (int)round(v);
+// Pick this category's colour
+int iv = (int)(v + 0.5);
+float4 col = C210;
 if      (iv == 201) col = C201; else if (iv == 202) col = C202;
 else if (iv == 203) col = C203; else if (iv == 204) col = C204;
 else if (iv == 205) col = C205; else if (iv == 206) col = C206;
 else if (iv == 207) col = C207; else if (iv == 208) col = C208;
-else if (iv == 209) col = C209; else                col = C210;
-if (col.a <= 0.001) return SceneTextureLookup(UV, 14, false).rgb; // category disabled
+else if (iv == 209) col = C209;
+if (col.a <= 0.001) return SceneColor;  // category disabled (subsystem sets alpha 0)
 
-// Edge = center differs from any neighbour (and at least one side is ours)
-bool edge = (sC != sL || sC != sR || sC != sU || sC != sD) &&
-            (OURS(sC) || OURS(sL) || OURS(sR) || OURS(sU) || OURS(sD));
+// Silhouette edge: centre differs from a neighbour, and some sample is ours
+bool edge = (sC != sL || sC != sR || sC != sU || sC != sD);
 
-// Occluded fill: our silhouette pixel that is hidden behind scene geometry
-float customDepth = SceneTextureLookup(UV, 24, false).r; // CustomDepth
-float sceneDepth  = SceneTextureLookup(UV, 1,  false).r; // SceneDepth
-bool occludedFill = OURS(sC) && (sceneDepth + 5.0 < customDepth);
+// Occluded fill: our pixel that sits behind scene geometry.
+// CustomDepth (13) and SceneDepth (1) are both linear world depth in cm.
+float customDepth = SceneTextureLookup(UV, 13, false).r;
+float sceneDepth  = SceneTextureLookup(UV, 1,  false).r;
+bool occluded = OURS(sC) && (sceneDepth + 5.0 < customDepth);
 
-float a = edge ? col.a : (occludedFill ? saturate(FillOpacity) * col.a : 0.0);
-
-float3 scene = SceneTextureLookup(UV, 14, false).rgb; // PostProcessInput0
-return lerp(scene, col.rgb, a);
+float a = edge ? col.a : (occluded ? saturate(FillOpacity) * col.a : 0.0);
+return lerp(SceneColor, col.rgb, a);
 ```
 
-SceneTexture ids used: `1` SceneDepth, `14` PostProcessInput0, `24` CustomDepth,
-`25` CustomStencil. Confirm against the tooltips on a SceneTexture node in your engine
-build if a lookup returns garbage.
+SceneTexture ids (confirmed in `Engine/Shaders/Private/MaterialTemplate.ush` for 5.6.1-CSS):
+`1` SceneDepth, `13` CustomDepth, `14` PostProcessInput0, `25` CustomStencil.
 
 > Custom Depth **+ stencil** is already enabled in the base game (`r.CustomDepth=3` in
 > `Config/DefaultEngine.ini`), so no project change is needed.
