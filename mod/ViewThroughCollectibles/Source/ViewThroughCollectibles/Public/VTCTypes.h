@@ -1,31 +1,31 @@
 #pragma once
 
 #include "CoreMinimal.h"
-// EOutlineColor lives in FactoryGame. Header name has been stable across SML releases, but
-// TODO(needs FactoryGame source access): confirm the path and the enumerator spelling
-// (OC_RED / OC_ORANGE / ...) against the version you build against.
-#include "FGOutlineComponent.h"
 #include "VTCTypes.generated.h"
 
 /**
  * Every collectible family the mod can outline. Kept flat (one entry per user-facing toggle)
  * so it maps 1:1 to the config UI and to FVTCConfigStruct's per-type fields.
+ *
+ * The numeric values double as the Custom Depth stencil value written for that category
+ * (offset by VTC::StencilBase in the subsystem), and as the MPC colour parameter index, so
+ * keep them contiguous starting at 0 and keep MAX last.
  */
 UENUM(BlueprintType)
 enum class EVTCCollectibleCategory : uint8
 {
-	HardDrivePod    UMETA(DisplayName = "Hard Drive Drop Pods"),
-	PowerSlugMk1    UMETA(DisplayName = "Power Slugs (Blue)"),
-	PowerSlugMk2    UMETA(DisplayName = "Power Slugs (Yellow)"),
-	PowerSlugMk3    UMETA(DisplayName = "Power Slugs (Purple)"),
-	MercerSphere    UMETA(DisplayName = "Mercer Spheres"),
-	Somersloop      UMETA(DisplayName = "Somersloops"),
-	BerylNut        UMETA(DisplayName = "Beryl Nut"),
-	Paleberry       UMETA(DisplayName = "Paleberry"),
-	BaconAgaric     UMETA(DisplayName = "Bacon Agaric"),
-	DroppedItem     UMETA(DisplayName = "Dropped Items"),
+	HardDrivePod    = 0  UMETA(DisplayName = "Hard Drive Drop Pods"),
+	PowerSlugMk1    = 1  UMETA(DisplayName = "Power Slugs (Blue)"),
+	PowerSlugMk2    = 2  UMETA(DisplayName = "Power Slugs (Yellow)"),
+	PowerSlugMk3    = 3  UMETA(DisplayName = "Power Slugs (Purple)"),
+	MercerSphere    = 4  UMETA(DisplayName = "Mercer Spheres"),
+	Somersloop      = 5  UMETA(DisplayName = "Somersloops"),
+	BerylNut        = 6  UMETA(DisplayName = "Beryl Nut"),
+	Paleberry       = 7  UMETA(DisplayName = "Paleberry"),
+	BaconAgaric     = 8  UMETA(DisplayName = "Bacon Agaric"),
+	DroppedItem     = 9  UMETA(DisplayName = "Dropped Items"),
 
-	MAX             UMETA(Hidden)
+	MAX             = 10 UMETA(Hidden)
 };
 
 /** Per-category settings block shown in the mod config menu. */
@@ -35,21 +35,14 @@ struct FVTCTypeSettings
 	GENERATED_BODY()
 
 	FVTCTypeSettings() = default;
-	FVTCTypeSettings(bool bInEnabled, EOutlineColor InColor)
+	FVTCTypeSettings(bool bInEnabled, const FLinearColor& InColor)
 		: bEnabled(bInEnabled), Color(InColor) {}
 
 	/** Whether this collectible family is outlined at all. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "View Through Collectibles")
 	bool bEnabled = true;
 
-	/**
-	 * Outline colour, chosen from the game's built-in outline palette.
-	 *
-	 * The game's UFGOutlineComponent only supports this fixed set of named colours, not an
-	 * arbitrary RGB value. If a custom-colour entry point is found on the outline component
-	 * in a future FactoryGame source drop, this can be widened to an FLinearColor without
-	 * changing the rest of the mod (only VTCOutlineSubsystem::ApplyOutline needs to adapt).
-	 */
+	/** Outline colour for this family. Alpha is used as the through-wall fill strength. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "View Through Collectibles")
-	EOutlineColor Color = EOutlineColor::OC_RED;
+	FLinearColor Color = FLinearColor(1.f, 0.15f, 0.1f, 1.f);
 };

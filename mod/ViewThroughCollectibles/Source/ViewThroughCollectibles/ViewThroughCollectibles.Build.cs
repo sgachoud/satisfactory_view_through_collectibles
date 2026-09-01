@@ -10,10 +10,9 @@ public class ViewThroughCollectibles : ModuleRules
 		{
 			"Core",
 			"CoreUObject",
-			"Engine",
-			"DeveloperSettings",
-			"SML",
-			"FactoryGame",
+			"Engine",          // UWorldSubsystem, APostProcessVolume, MPC, MID, KismetMaterialLibrary
+			"SML",             // UConfigManager (mod configuration)
+			"FactoryGame",     // AFGScannableSubsystem, AFGItemPickup(_Spawnable), AFGDropPod, UFGItemDescriptor
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });

@@ -3,18 +3,32 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "VTCTypes.h"
+#include "VTCConfig.h"
 #include "VTCOutlineSubsystem.generated.h"
 
 class AActor;
-class UFGOutlineComponent;
+class APostProcessVolume;
+class UMaterialInterface;
+class UMaterialInstanceDynamic;
+class UMaterialParameterCollection;
+
+namespace VTC
+{
+	/** Custom Depth stencil values used by this mod are StencilBase + category + 1 (201..210). */
+	inline constexpr int32 StencilBase = 200;
+}
 
 /**
- * Client-side, cosmetic-only subsystem that keeps the game's outline component pointed at
- * the collectibles the local player has enabled and is currently near.
+ * Client-side, cosmetic-only subsystem.
  *
- * Multiplayer: this never runs on a dedicated server, never spawns or replicates anything,
- * and only reads already-replicated actor transforms. Two clients can have completely
- * different settings; neither affects the other or the save.
+ * Draws a coloured, see-through silhouette on nearby collectibles by:
+ *  - writing a per-category Custom Depth stencil value onto each collectible's mesh, and
+ *  - blending a post-process material (M_VTCOutline) that turns those stencil values into
+ *    outlines, with colours fed from a Material Parameter Collection (MPC_VTCColors).
+ *
+ * Multiplayer: never runs on a dedicated server, never spawns/replicates a gameplay actor
+ * (the post-process volume is transient and client-local), never writes the save. Reads
+ * only already-replicated collectible positions. Fully independent per client.
  */
 UCLASS()
 class VIEWTHROUGHCOLLECTIBLES_API UVTCOutlineSubsystem : public UWorldSubsystem
@@ -22,45 +36,56 @@ class VIEWTHROUGHCOLLECTIBLES_API UVTCOutlineSubsystem : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
-	//~ USubsystem
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
-	//~ UWorldSubsystem
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 
 private:
-	/** Recompute the desired outline set and diff it against what is currently shown. */
+	void SetupPostProcess();
 	void RefreshOutlines();
 
-	/** Rebuild CandidateActors by sweeping the world for collectible base classes. */
-	void RebuildCandidateCache();
+	/** Push colours / thickness / fill from config into MPC_VTCColors (skips if unchanged). */
+	void PushConfigToMaterial(const FVTCConfigStruct& Cfg);
 
-	/** Map an actor to a collectible category, or return false if it is not one we handle. */
-	bool ResolveCategory(const AActor* Actor, EVTCCollectibleCategory& OutCategory) const;
+	/** Categorise a collectible. Actor may be null (not streamed in) — then only FallbackClass is used. */
+	bool ResolveCategory(const AActor* Actor, const UClass* FallbackClass, EVTCCollectibleCategory& OutCategory) const;
 
-	/** Resolve the local player's outline component, or nullptr if unavailable this frame. */
-	UFGOutlineComponent* GetLocalOutlineComponent() const;
+	/** Enable/disable Custom Depth + set the stencil value on every mesh component of Actor. */
+	static void ApplyCustomDepth(AActor* Actor, int32 StencilValue, bool bEnable);
 
-	void HideAllTrackedOutlines();
+	void ClearAllTrackedOutlines();
 
-	/** Populate CategoryByClassPath from built-in defaults + [/Script/...] ini overrides. */
-	void LoadClassCategoryTable();
+	/** Seed CategoryByDescriptor / CategoryByActorClass from built-in defaults + ini overrides. */
+	void LoadCategoryTables();
+
+	static int32 StencilFor(EVTCCollectibleCategory Category)
+	{
+		return VTC::StencilBase + static_cast<int32>(Category) + 1;
+	}
+
+	UPROPERTY(Transient)
+	TObjectPtr<APostProcessVolume> PostProcessVolume;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInstanceDynamic> OutlineMID;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialParameterCollection> ColorCollection;
 
 	FTimerHandle RefreshTimerHandle;
 
-	/** Slow-changing set of things worth distance-checking each refresh. */
-	TArray<TWeakObjectPtr<AActor>> CandidateActors;
-	double LastCandidateRebuildSeconds = 0.0;
+	/** Actor -> category currently written into Custom Depth. */
+	TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory> TrackedOutlines;
 
-	/** What is outlined right now, and in which colour, so we only touch changes. */
-	TMap<TWeakObjectPtr<AActor>, EOutlineColor> TrackedOutlines;
+	TMap<FSoftClassPath, EVTCCollectibleCategory> CategoryByDescriptor;
+	TMap<FSoftClassPath, EVTCCollectibleCategory> CategoryByActorClass;
 
-	/** Class path -> category. Seeded in LoadClassCategoryTable(), ini-overridable. */
-	TMap<FSoftClassPath, EVTCCollectibleCategory> CategoryByClassPath;
+	/** Last values pushed to the MPC, to avoid redundant per-tick writes. */
+	FVTCConfigStruct LastPushedConfig;
+	bool bConfigEverPushed = false;
 
-	/** Set when ShowOutline() throws/ensures on a drop pod, to stop retrying that category. */
-	bool bHardDrivePodOutlineDisabled = false;
-
-	static constexpr double CandidateRebuildIntervalSeconds = 2.0;
+	// Content asset paths (mount point is /<ModReference>/). Adjust if you move the assets.
+	static const TCHAR* OutlineMaterialPath;
+	static const TCHAR* ColorCollectionPath;
 };

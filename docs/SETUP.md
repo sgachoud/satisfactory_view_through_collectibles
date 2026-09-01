@@ -107,16 +107,12 @@ placeholder that the generated header will replace.
    `ModConfiguration` → name it `ViewThroughCollectibles_Config`.
 2. Open it. Set **Mod Reference** = `ViewThroughCollectibles`, **Display Name** =
    "View Through Collectibles", fill Description.
-3. Set **Root Section** = `BP Config Property Section`. In its *Section Properties* add,
-   matching this repo's `FVTCConfigStruct`:
-   - `MaxDistanceMeters` → Float (default 120, min 10, max 1000)
-   - `RefreshIntervalSeconds` → Float (default 0.5)
-   - `MaxSimultaneousOutlines` → Int (default 128)
-   - one **Section** per collectible type (`HardDrivePods`, `PowerSlugsBlue`, …,
-     `DroppedItems`), each containing:
-     - `bEnabled` → Bool
-     - `Color` → **Class** property pointing at the outline colour enum *or* (simpler) an
-       Int/enum selector 0–5 that you map to `EOutlineColor` in code. See Phase E note.
+3. Set **Root Section** = `BP Config Property Section`. In its *Section Properties* add the
+   fields exactly as listed in [`CONTENT-ASSETS.md`](CONTENT-ASSETS.md) §3 (mirrors
+   `FVTCConfigStruct`): `MaxDistanceMeters`/`RefreshIntervalSeconds`/`OutlineThicknessPixels`/
+   `OccludedFillOpacity` (Float), `MaxSimultaneousOutlines` (Int), and one **Section** per
+   collectible type with `bEnabled` (Bool) + `Color` (**Color** property — real RGBA).
+   Also build `MPC_VTCColors` and `M_VTCOutline` per §1–§2 of that doc.
 4. Create a **Game Instance Module** BP (right-click → Blueprint Class →
    `GameInstanceModule`) named `RootGameInstance_ViewThroughCollectibles`. Open it, tick
    **Is Root Module**, and add `ViewThroughCollectibles_Config` to its **Mod
@@ -134,19 +130,18 @@ placeholder that the generated header will replace.
 
 ---
 
-## Phase E — Resolve the source-dependent TODOs
+## Phase E — Resolve the remaining verification items
 
-With the FactoryGame headers now available (`D:/SML/Source/FactoryGame/…`), search them
-and fix each `TODO(needs FactoryGame source access)`:
+Most API drift is already resolved against the local headers (see `FINDINGS.md`). What's
+left, marked `TODO(verify …)` in the source / docs:
 
 | Where | What to confirm |
 |---|---|
-| `VTCOutlineSubsystem.cpp` `GetLocalOutlineComponent()` | The real way to get the local player's `UFGOutlineComponent` — grep `FGOutlineComponent.h` for a static `GetOutlineComponent` / check `AFGCharacterPlayer` for a `GetOutline()` accessor. |
-| same file, `ShowOutline` / `HideOutline` calls | Exact signatures + whether there's a batch (`TArray<AActor*>`) overload. |
-| `VTCTypes.h` `EOutlineColor` | Real enumerator names. If there's no plain enum (it's driven by custom primitive data / a curve), switch `FVTCTypeSettings::Color` to an `int32`/local `UENUM` and translate in `ApplyOutline`. |
-| `#include` block in `VTCOutlineSubsystem.cpp` | Real header paths for `AFGItemPickup`, `AFGItemPickup_Spawnable`, `AFGDropPod`, `AFGCharacterPlayer`. |
-| `VTCConfig.cpp` `GetActiveConfig` | Replace body with the generated one, or match `UConfigManager::FillConfigurationStruct(FConfigId, …)` exactly. |
-| `LoadClassCategoryTable()` paths | Verify every BP path (see `collectible-classes.md`) — in the editor, browse `FactoryGame Content` or use FModel on the packaged game. |
+| `M_VTCOutline` Custom node | SceneTexture ids (SceneDepth=1, PostProcessInput0=14, CustomDepth=24, CustomStencil=25) against your engine build's SceneTexture node tooltips. |
+| `LoadCategoryTables()` flora entries | Folder names are mismatched — `Desc_Berry` = Beryl Nut? Pick one up in-game and check the item, or fix via `Game.ini` `[ViewThroughCollectibles.Categories]`. |
+| `BP_Crystal` mesh | Whether world power slugs use regular `UMeshComponent`s. If they're abstract/instanced, Custom Depth won't apply — outline the `AFGItemPickup` proxy mesh instead. |
+| `VTCConfig.cpp` `GetActiveConfig` | Replace body with the editor-generated accessor if its shape differs from `FillConfigurationStruct(FConfigId, FDynamicStructInfo)`. |
+| module `.cpp` | If you used the Alpakit "C++ and Blueprint" template, keep its `…Module.cpp` and delete this repo's `ViewThroughCollectiblesModule.cpp` (don't have two module implementations). |
 
 Build **Development Editor** after each round of changes.
 
@@ -160,12 +155,12 @@ Build **Development Editor** after each round of changes.
    and copies the mod into `<Satisfactory>/FactoryGame/Mods/`.
 3. Launch the game (or let Alpakit launch it). SMM in developer mode will list the mod.
 4. Run the checks in the repo `README.md` → "Verifying":
-   - config menu shows all types + distance slider;
-   - singleplayer: outlines through terrain within distance, hide past it, live toggle,
+   - config menu shows all types + distance / thickness / fill;
+   - singleplayer: coloured see-through outlines within distance, drop past it, live toggle,
      live colour change, dropped item outlines;
    - multiplayer: host + client (and/or a dedicated server) — subsystem absent on the
      dedicated server log, per-client independent, no replication warnings, save unchanged;
-   - hammer on a drop pod (and with Long Reach if installed) — no `ShowOutline` crash.
+   - perf: frame time OK in a slug-dense area at default `MaxSimultaneousOutlines`.
 
 ---
 

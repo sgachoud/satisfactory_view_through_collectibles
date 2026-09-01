@@ -5,11 +5,9 @@
 #include "Engine/GameInstance.h"
 
 // SML configuration runtime.
-// TODO(needs SML source access): these include paths and the ConfigManager API are correct
-// for recent SML but should be re-checked against the SML version you build against. If the
+// TODO(verify against SML 3.12): include path + FillConfigurationStruct signature. If the
 // in-editor Configuration Tool generates its own GetActiveConfig(), prefer that body.
-#include "Configuration/ConfigManager.h"
-#include "Configuration/ConfigId.h"
+#include "Configuration/ConfigManager.h"     // also pulls FConfigId (ModConfiguration.h) + FDynamicStructInfo (ReflectionHelper.h)
 
 const FVTCTypeSettings& FVTCConfigStruct::GetFor(EVTCCollectibleCategory Category) const
 {
@@ -41,8 +39,7 @@ FVTCConfigStruct FVTCConfigStruct::GetActiveConfig(const UObject* WorldContext)
 		return Config; // defaults
 	}
 
-	UConfigManager* ConfigManager =
-		World->GetGameInstance()->GetSubsystem<UConfigManager>();
+	UConfigManager* ConfigManager = World->GetGameInstance()->GetSubsystem<UConfigManager>();
 	if (!ConfigManager)
 	{
 		return Config; // defaults
@@ -50,7 +47,7 @@ FVTCConfigStruct FVTCConfigStruct::GetActiveConfig(const UObject* WorldContext)
 
 	// Root config id: { modReference, "" }. modReference must match the .uplugin name.
 	const FConfigId ConfigId{ TEXT("ViewThroughCollectibles"), TEXT("") };
-	ConfigManager->FillConfigStruct(
+	ConfigManager->FillConfigurationStruct(
 		ConfigId,
 		FDynamicStructInfo{ FVTCConfigStruct::StaticStruct(), &Config });
 
