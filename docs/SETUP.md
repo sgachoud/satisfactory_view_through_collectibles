@@ -172,6 +172,17 @@ Build **Development Editor** after each round of changes.
 - C++ body-only changes: Unreal Live Coding (Ctrl+Alt+F11) usually suffices.
 - Config schema changes: re-run *Regenerate Configuration Structs*.
 
+## Troubleshooting seen on this machine
+
+- **`LINK : fatal error LNK1181: cannot open input file 'delayimp.lib'`** on every DLL link —
+  the MSVC v14.38 build tools installed were the **ARM64/ARM** variant, not **x64/x86**
+  (`VC\Tools\MSVC\14.38.33130\lib\` had only `arm\`, no `x64\`). Fix: VS Installer → Modify →
+  Individual components → check **"MSVC v143 - VS 2022 C++ x64/x86 build tools (v14.38-17.8)"**.
+  Already-compiled `.obj` files are cached, so the re-run resumes.
+- Alpakit's game-feature templates create the plugin under
+  `SatisfactoryModLoader\Mods\GameFeatures\<ModRef>\`, not `Mods\<ModRef>\`. Content mount
+  point is still `/<ModRef>/`.
+
 ## Phase H — Release (later)
 
 Alpakit Edit Mod → fill metadata + icon (≥128²) → **Alpakit Release** → upload the result
