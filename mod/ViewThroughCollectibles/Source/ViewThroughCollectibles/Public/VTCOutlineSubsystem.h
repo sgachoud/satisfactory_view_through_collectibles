@@ -28,10 +28,11 @@ namespace VTC
  *  - blending a post-process material (M_VTCOutline) that turns those stencil values into
  *    outlines, with colours fed from a Material Parameter Collection (MPC_VTCColors).
  *
- * When the server also has the mod, a UVTCCollectibleFeedComponent on the local
- * PlayerController carries positions of collectibles that are too far to have streamed in;
- * those get a small see-through marker sphere (invisible except in the outline pass) until
- * the real actor loads.
+ * Collectibles between the outline distance and RemoteMarkerMaxDistanceMeters get a small
+ * see-through marker sphere (invisible except in the outline pass). Their positions come
+ * from the local AFGScannableSubsystem registry when we're the authority (solo / listen
+ * host), or from a replicated UVTCCollectibleFeedComponent when we're a remote client and
+ * the server also has the mod.
  *
  * Multiplayer: never runs on a dedicated server, never spawns/replicates a gameplay actor
  * (the post-process volume and marker spheres are transient and client-local), never

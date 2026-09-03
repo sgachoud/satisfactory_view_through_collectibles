@@ -432,20 +432,69 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		return;
 	}
 
-	// The feed component only exists if the server also runs the mod.
-	const APlayerController* PC = World->GetFirstPlayerController();
-	const UVTCCollectibleFeedComponent* Feed =
-		PC ? PC->FindComponentByClass<UVTCCollectibleFeedComponent>() : nullptr;
-
 	const float MarkerMeters = Cfg.RemoteMarkerMaxDistanceMeters;
-	if (!Feed || MarkerMeters <= 0.f)
+	if (MarkerMeters <= 0.f)
 	{
 		ClearRemoteMarkers();
 		return;
 	}
 
+	if (!MarkerMesh)
+	{
+		MarkerMesh = LoadObject<UStaticMesh>(nullptr, MarkerMeshPath);
+		if (!MarkerMesh)
+		{
+			UE_LOG(LogViewThroughCollectibles, Warning,
+				TEXT("Marker mesh %s not found - distant-collectible markers disabled."), MarkerMeshPath);
+			ClearRemoteMarkers();
+			return;
+		}
+	}
+
+	// Candidate positions come from whichever source we have:
+	//  - solo / listen-server host: the local AFGScannableSubsystem registry (has every
+	//    collectible regardless of streaming),
+	//  - remote client: the server-fed list on our PlayerController's feed component,
+	//  - neither: no markers.
+	TArray<FVTCFedCollectible> Candidates;
+	if (AFGScannableSubsystem* Scan = AFGScannableSubsystem::Get(this))
+	{
+		auto Gather = [&](const TArray<FWorldScannableData>& Data, bool bDropPods)
+		{
+			for (const FWorldScannableData& D : Data)
+			{
+				if (bDropPods ? Scan->HasDropPodBeenLooted(D.ActorGuid) : !Scan->DoesPickupExist(D.ActorGuid))
+				{
+					continue;
+				}
+				EVTCCollectibleCategory Cat;
+				if (Tables.Resolve(D.Actor.Get(), D.ActorClass.Get(), Cat))
+				{
+					FVTCFedCollectible F;
+					F.Location = D.ActorLocation;
+					F.Category = static_cast<uint8>(Cat);
+					Candidates.Add(F);
+				}
+			}
+		};
+		Gather(Scan->GetAvailableItemPickups(), /*bDropPods*/ false);
+		Gather(Scan->GetAvailableDropPods(), /*bDropPods*/ true);
+	}
+	if (Candidates.Num() == 0)
+	{
+		const APlayerController* PC = World->GetFirstPlayerController();
+		const UVTCCollectibleFeedComponent* Feed =
+			PC ? PC->FindComponentByClass<UVTCCollectibleFeedComponent>() : nullptr;
+		if (!Feed)
+		{
+			ClearRemoteMarkers();
+			return;
+		}
+		Candidates = Feed->GetFeed();
+	}
+
 	const double MarkerDistSq = FMath::Square(static_cast<double>(MarkerMeters) * 100.0);
-	// A fed collectible this close to one we're already outlining is the same object — skip it.
+	// A candidate this close to one we're already outlining is the same object — skip it.
 	const double DedupeDistSq = FMath::Square(400.0);
 
 	// Cache the positions of what we're already outlining, to suppress duplicate markers.
@@ -458,8 +507,10 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		}
 	}
 
-	TSet<uint64> Wanted;
-	for (const FVTCFedCollectible& Entry : Feed->GetFeed())
+	// Filter to markers we want this tick, nearest first, capped to the outline budget.
+	struct FWantedMarker { uint64 Key; FVector Loc; EVTCCollectibleCategory Category; double DistSq; };
+	TArray<FWantedMarker> WantedList;
+	for (const FVTCFedCollectible& Entry : Candidates)
 	{
 		if (Entry.Category >= static_cast<uint8>(EVTCCollectibleCategory::MAX))
 		{
@@ -471,7 +522,8 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 			continue;
 		}
 		const FVector Loc = Entry.Location;
-		if (FVector::DistSquared(Loc, PlayerLoc) > MarkerDistSq)
+		const double DistSq = FVector::DistSquared(Loc, PlayerLoc);
+		if (DistSq > MarkerDistSq)
 		{
 			continue;
 		}
@@ -488,8 +540,22 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		{
 			continue;
 		}
+		WantedList.Add({ MarkerKey(Loc, Entry.Category), Loc, Category, DistSq });
+	}
 
-		const uint64 Key = MarkerKey(Loc, Entry.Category);
+	WantedList.Sort([](const FWantedMarker& A, const FWantedMarker& B) { return A.DistSq < B.DistSq; });
+	const int32 MaxMarkers = FMath::Clamp(Cfg.MaxSimultaneousOutlines, 1, 2048);
+	if (WantedList.Num() > MaxMarkers)
+	{
+		WantedList.SetNum(MaxMarkers);
+	}
+
+	TSet<uint64> Wanted;
+	for (const FWantedMarker& W : WantedList)
+	{
+		const uint64 Key = W.Key;
+		const FVector Loc = W.Loc;
+		const EVTCCollectibleCategory Category = W.Category;
 		Wanted.Add(Key);
 		if (RemoteMarkers.Contains(Key))
 		{
@@ -497,17 +563,6 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		}
 
 		// Spawn a transient, non-colliding marker whose mesh renders only into Custom Depth.
-		if (!MarkerMesh)
-		{
-			MarkerMesh = LoadObject<UStaticMesh>(nullptr, MarkerMeshPath);
-			if (!MarkerMesh)
-			{
-				UE_LOG(LogViewThroughCollectibles, Warning,
-					TEXT("Marker mesh %s not found - distant-collectible markers disabled."), MarkerMeshPath);
-				return;
-			}
-		}
-
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.ObjectFlags |= RF_Transient;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
