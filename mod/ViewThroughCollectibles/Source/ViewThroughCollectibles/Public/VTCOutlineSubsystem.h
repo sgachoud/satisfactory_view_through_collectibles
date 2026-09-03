@@ -85,6 +85,15 @@ private:
 	FVTCConfigStruct LastPushedConfig;
 	bool bConfigEverPushed = false;
 
+	/**
+	 * We force r.CustomDepthTemporalAAJitter to 0 while active so the outline stops
+	 * shimmering (the Custom Depth pass otherwise inherits the TSR/TAA sub-pixel jitter).
+	 * This holds the value to restore on Deinitialize; INT_MIN means "never changed it".
+	 */
+	int32 SavedCustomDepthJitter = MIN_int32;
+	void ApplyCustomDepthJitterOverride();
+	void RestoreCustomDepthJitterOverride();
+
 	// Content asset paths (mount point is /<ModReference>/). Adjust if you move the assets.
 	static const TCHAR* OutlineMaterialPath;
 	static const TCHAR* ColorCollectionPath;

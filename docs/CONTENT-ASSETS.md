@@ -83,25 +83,39 @@ Custom node **inputs** (Name → wire):
 Custom node **Code** (verified against this engine's `MaterialTemplate.ush`):
 
 ```hlsl
-// Screen-space texel size (viewport). Use ResolvedView if View gives artifacts.
-float2 o = View.ViewSizeAndInvSize.zw * max(Thickness, 0.5);
+// Screen-space texel size (viewport).
+float2 texel = View.ViewSizeAndInvSize.zw;
+float  thick = max(Thickness, 1.0);
 
 // CustomStencil (id 25) returns the raw stencil integer in .r (e.g. 201.0), not normalised.
-#define STEN(uv) (SceneTextureLookup(uv, 25, false).r)
+// Clamp taps so screen-edge samples don't wrap.
+#define STEN(uv) (SceneTextureLookup(clamp((uv), texel, 1.0 - texel), 25, false).r)
+#define OURS(s)  ((s) > 200.5 && (s) < 210.5)
+
 float sC = STEN(UV);
-float sL = STEN(UV + float2(-o.x, 0));
-float sR = STEN(UV + float2( o.x, 0));
-float sU = STEN(UV + float2(0, -o.y));
-float sD = STEN(UV + float2(0,  o.y));
+bool  centerOurs = OURS(sC);
 
-// Ours = stencil 201..210
-#define OURS(s) ((s) > 200.5 && (s) < 210.5)
+// 8-tap ring at the thickness radius. Count mismatches for a *fractional* edge, and
+// adopt a neighbour's category so the outline can extend one ring outside the silhouette.
+float2 dirs[8] =
+{
+    float2(-1,-1), float2(0,-1), float2(1,-1),
+    float2(-1, 0),               float2(1, 0),
+    float2(-1, 1), float2(0, 1), float2(1, 1)
+};
 
-float v = OURS(sC) ? sC : OURS(sL) ? sL : OURS(sR) ? sR : OURS(sU) ? sU : OURS(sD) ? sD : 0.0;
-if (v < 200.5) return SceneColor;
+float ourStencil = centerOurs ? sC : 0.0;
+int   mismatch   = 0;
+[unroll] for (int i = 0; i < 8; ++i)
+{
+    float s = STEN(UV + dirs[i] * texel * thick);
+    if (OURS(s) && ourStencil < 200.5) ourStencil = s;
+    if (s != sC) mismatch++;
+}
+if (ourStencil < 200.5) return SceneColor;
 
 // Pick this category's colour
-int iv = (int)(v + 0.5);
+int iv = (int)(ourStencil + 0.5);
 float4 col = C210;
 if      (iv == 201) col = C201; else if (iv == 202) col = C202;
 else if (iv == 203) col = C203; else if (iv == 204) col = C204;
@@ -110,18 +124,25 @@ else if (iv == 207) col = C207; else if (iv == 208) col = C208;
 else if (iv == 209) col = C209;
 if (col.a <= 0.001) return SceneColor;  // category disabled (subsystem sets alpha 0)
 
-// Silhouette edge: centre differs from a neighbour, and some sample is ours
-bool edge = (sC != sL || sC != sR || sC != sU || sC != sD);
+// Fractional silhouette coverage -> feathers the edge over ~1px, much less crawl than a
+// binary test. 3+ mismatched neighbours = a full-strength edge pixel.
+float edgeAmount = saturate(mismatch / 3.0);
 
 // Occluded fill: our pixel that sits behind scene geometry.
-// CustomDepth (13) and SceneDepth (1) are both linear world depth in cm.
+// CustomDepth (13) and SceneDepth (1) are both linear world depth in cm. The 20 cm bias
+// keeps the fill boundary from shimmering against the still-jittered scene depth.
 float customDepth = SceneTextureLookup(UV, 13, false).r;
 float sceneDepth  = SceneTextureLookup(UV, 1,  false).r;
-bool occluded = OURS(sC) && (sceneDepth + 5.0 < customDepth);
+bool  occluded    = centerOurs && (sceneDepth + 20.0 < customDepth);
 
-float a = edge ? col.a : (occluded ? saturate(FillOpacity) * col.a : 0.0);
+float a = max(edgeAmount * col.a, occluded ? saturate(FillOpacity) * col.a : 0.0);
 return lerp(SceneColor, col.rgb, a);
 ```
+
+> The edge is still screen-space and un-accumulated, so fast camera motion will show some
+> crawl — eliminating that entirely needs a temporal history buffer, out of scope here.
+> The subsystem also forces `r.CustomDepthTemporalAAJitter 0` while active (restored on
+> unload), which removes the Custom Depth pass's own TSR/TAA jitter.
 
 SceneTexture ids (confirmed in `Engine/Shaders/Private/MaterialTemplate.ush` for 5.6.1-CSS):
 `1` SceneDepth, `13` CustomDepth, `14` PostProcessInput0, `25` CustomStencil.
@@ -140,9 +161,12 @@ Follow `docs/SETUP.md` Phase D. The schema must mirror `FVTCConfigStruct` field-
 - `OutlineThicknessPixels` float, `OccludedFillOpacity` float
 - Sections `HardDrivePods`, `PowerSlugsBlue`, `PowerSlugsYellow`, `PowerSlugsPurple`,
   `MercerSpheres`, `Somersloops`, `BerylNut`, `Paleberry`, `BaconAgaric`, `DroppedItems`,
-  each with `bEnabled` bool + `Color` **Color** property.
+  each with `Enabled` bool + `Color` **String** property.
 
-Generate the C++ header from it and reconcile with `VTCConfig.h`.
+SML 3.12 has no colour property type, so `Color` is a hex string — `"RRGGBB"` or
+`"RRGGBBAA"`, leading `#` optional. `FVTCTypeSettings::GetLinearColor()` parses it via
+`FColor::FromHex`. This asset is already built and committed; regenerate the C++ header
+from it only after a schema change and reconcile with `VTCConfig.h`.
 
 ## 4. `RootGameInstance_ViewThroughCollectibles` — GameInstanceModule
 

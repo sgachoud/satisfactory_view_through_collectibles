@@ -1,6 +1,7 @@
 #include "VTCOutlineSubsystem.h"
 
 #include "EngineUtils.h"
+#include "HAL/IConsoleManager.h"
 #include "TimerManager.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
@@ -63,6 +64,7 @@ void UVTCOutlineSubsystem::Deinitialize()
 		World->GetTimerManager().ClearTimer(RefreshTimerHandle);
 	}
 	ClearAllTrackedOutlines();
+	RestoreCustomDepthJitterOverride();
 
 	if (IsValid(PostProcessVolume))
 	{
@@ -78,6 +80,7 @@ void UVTCOutlineSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 
+	ApplyCustomDepthJitterOverride();
 	SetupPostProcess();
 
 	const FVTCConfigStruct Cfg = FVTCConfigStruct::GetActiveConfig(this);
@@ -173,6 +176,33 @@ void UVTCOutlineSubsystem::PushConfigToMaterial(const FVTCConfigStruct& Cfg)
 
 	LastPushedConfig = Cfg;
 	bConfigEverPushed = true;
+}
+
+void UVTCOutlineSubsystem::ApplyCustomDepthJitterOverride()
+{
+	if (SavedCustomDepthJitter != MIN_int32)
+	{
+		return; // already applied
+	}
+	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.CustomDepthTemporalAAJitter")))
+	{
+		SavedCustomDepthJitter = CVar->GetInt();
+		// SetByGameOverride so the user can still override it from the console if they want.
+		CVar->Set(0, ECVF_SetByGameOverride);
+	}
+}
+
+void UVTCOutlineSubsystem::RestoreCustomDepthJitterOverride()
+{
+	if (SavedCustomDepthJitter == MIN_int32)
+	{
+		return; // never touched it
+	}
+	if (IConsoleVariable* CVar = IConsoleManager::Get().FindConsoleVariable(TEXT("r.CustomDepthTemporalAAJitter")))
+	{
+		CVar->Set(SavedCustomDepthJitter, ECVF_SetByGameOverride);
+	}
+	SavedCustomDepthJitter = MIN_int32;
 }
 
 // ---------------------------------------------------------------------------------------------
