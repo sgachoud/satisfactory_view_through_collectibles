@@ -136,6 +136,15 @@ Not design problems — things only confirmable in the editor / in-game, marked
 - `M_VTCOutline` compiling and reading stencil correctly once applied to a live scene
   (the SceneTexture ids 1/13/14/25 are confirmed against `MaterialTemplate.ush`).
 
+## For players
+
+Install from [ficsit.app](https://ficsit.app); usage and configuration are in
+[docs/USAGE.md](docs/USAGE.md).
+
 ## Credits
 
 Designed and implemented with Claude Sonnet 5 by Anthropic.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
