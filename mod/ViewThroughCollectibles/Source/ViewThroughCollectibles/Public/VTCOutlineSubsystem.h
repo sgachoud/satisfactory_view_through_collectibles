@@ -13,6 +13,8 @@ class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UMaterialParameterCollection;
 class UStaticMesh;
+class UTexture2D;
+class UFGActorRepresentation;
 
 namespace VTC
 {
@@ -61,10 +63,16 @@ private:
 
 	void ClearAllTrackedOutlines();
 
-	/** Server-fed distant collectibles -> transient marker spheres. No-op without a feed component. */
+	/** Distant collectibles (registry or server feed) -> transient marker spheres. */
 	void RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, const FVector& PlayerLoc,
 		const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines);
 	void ClearRemoteMarkers();
+
+	/** Category-coloured map/compass dots for everything currently outlined or markered. */
+	void RefreshMapDots(const FVTCConfigStruct& Cfg,
+		const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines);
+	void ClearMapDots();
+	UTexture2D* EnsureDotTexture();
 
 	static int32 StencilFor(EVTCCollectibleCategory Category)
 	{
@@ -87,13 +95,29 @@ private:
 
 	/**
 	 * Quantised world position -> the transient marker sphere placed there for a distant
-	 * collectible. Not a UPROPERTY (uint64 keys aren't UHT-supported); the world owns the
-	 * marker actors, we only weak-reference them.
+	 * collectible, plus its location/category (for the map dots). Not a UPROPERTY (uint64
+	 * keys aren't UHT-supported); the world owns the marker actors, we only weak-reference.
 	 */
-	TMap<uint64, TWeakObjectPtr<AActor>> RemoteMarkers;
+	struct FTrackedMarker
+	{
+		TWeakObjectPtr<AActor> Actor;
+		FVector Location = FVector::ZeroVector;
+		EVTCCollectibleCategory Category = EVTCCollectibleCategory::HardDrivePod;
+
+		FTrackedMarker() = default;
+		FTrackedMarker(AActor* InActor, const FVector& InLoc, EVTCCollectibleCategory InCat)
+			: Actor(InActor), Location(InLoc), Category(InCat) {}
+	};
+	TMap<uint64, FTrackedMarker> RemoteMarkers;
+
+	/** Quantised world position -> the map/compass representation dot placed there. */
+	TMap<uint64, TWeakObjectPtr<UFGActorRepresentation>> MapDots;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMesh> MarkerMesh;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UTexture2D> DotTexture;
 
 	FVTCCategoryTables Tables;
 

@@ -108,8 +108,8 @@ placeholder that the generated header will replace.
    fields exactly as listed in [`CONTENT-ASSETS.md`](CONTENT-ASSETS.md) §3 (mirrors
    `FVTCConfigStruct`): `MaxDistanceMeters`/`RefreshIntervalSeconds`/`OutlineThicknessPixels`/
    `OccludedFillOpacity`/`RemoteMarkerMaxDistanceMeters` (Float), `MaxSimultaneousOutlines`
-   (Int), and one **Section** per collectible type with `Enabled` (Bool) + `Color`
-   (**String** — hex `RRGGBB`; SML 3.12 has no colour property type).
+   (Int), `ShowOnMap` (Bool), and one **Section** per collectible type with `Enabled` (Bool)
+   + `Color` (**String** — hex `RRGGBB`; SML 3.12 has no colour property type).
    Also build `MPC_VTCColors` and `M_VTCOutline` per §1–§2 of that doc.
 4. Create a **Game Instance Module** BP (right-click → Blueprint Class →
    `GameInstanceModule`) named `RootGameInstance_ViewThroughCollectibles`. Open it, tick

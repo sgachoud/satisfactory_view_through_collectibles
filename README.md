@@ -28,6 +28,8 @@ Each type is independently toggleable and has its own RGB outline colour.
   a coloured edge (and a faint fill where the collectible is hidden behind geometry).
   Colours, thickness and fill opacity come from a Material Parameter Collection
   (`MPC_VTCColors`) that the subsystem updates live from the mod config.
+- Optionally (**Show on Map**), each active outline/marker also gets a category-coloured
+  dot on the map and compass via `AFGActorRepresentationManager` (client-local, no actor).
 
 Custom Depth + stencil is already enabled in the base game (`r.CustomDepth=3`), so no
 project-level change is required. While the subsystem is active it also forces
@@ -64,6 +66,7 @@ options):
 | **Max Simultaneous Outlines** | Safety cap; nearest collectibles win. |
 | **Outline Thickness (px)** | Edge width in screen pixels. |
 | **Occluded Fill Opacity** | Tint strength over the parts hidden behind geometry. |
+| **Show on Map** | Also put a category-coloured dot on the map and compass for everything currently outlined or markered. |
 | **Per type**: Enabled + Color | Show/hide each collectible family and pick its RGB colour. |
 
 ## Layout

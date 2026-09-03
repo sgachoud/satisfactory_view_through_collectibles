@@ -42,6 +42,10 @@ struct VIEWTHROUGHCOLLECTIBLES_API FVTCConfigStruct
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
 	float OccludedFillOpacity = 0.12f;
 
+	/** Also drop a category-coloured dot on the map and compass for every active outline/marker. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
+	bool ShowOnMap = false;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Types")
 	FVTCTypeSettings HardDrivePods{ true, TEXT("FF7300") };
 

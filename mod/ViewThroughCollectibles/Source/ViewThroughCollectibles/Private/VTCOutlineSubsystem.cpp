@@ -9,6 +9,9 @@
 #include "Engine/World.h"
 #include "Engine/PostProcessVolume.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/Texture2D.h"
+#include "TextureResource.h"
+#include "PixelFormat.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Components/MeshComponent.h"
@@ -24,6 +27,8 @@
 #include "FGItemPickup.h"
 #include "FGItemPickup_Spawnable.h"
 #include "FGDropPod.h"
+#include "FGActorRepresentationManager.h"
+#include "FGActorRepresentation.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogViewThroughCollectibles, Log, All);
 
@@ -69,6 +74,7 @@ void UVTCOutlineSubsystem::Deinitialize()
 	}
 	ClearAllTrackedOutlines();
 	ClearRemoteMarkers();
+	ClearMapDots();
 	RestoreCustomDepthJitterOverride();
 
 	if (IsValid(PostProcessVolume))
@@ -369,8 +375,11 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 		}
 	}
 
-	// --- Distant collectibles the server told us about but we haven't streamed in ----------
+	// --- Distant collectibles (registry or server feed) we haven't streamed in ------------
 	RefreshRemoteMarkers(Cfg, PlayerLoc, Desired);
+
+	// --- Map / compass dots ---------------------------------------------------------------
+	RefreshMapDots(Cfg, Desired);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -585,13 +594,13 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		MeshComp->SetCustomDepthStencilValue(StencilFor(Category));
 		MeshComp->RegisterComponent();
 
-		RemoteMarkers.Add(Key, Marker);
+		RemoteMarkers.Add(Key, FTrackedMarker(Marker, Loc, Category));
 	}
 
 	// Drop markers no longer wanted (collected, out of range, or now streamed in and outlined).
 	for (auto It = RemoteMarkers.CreateIterator(); It; ++It)
 	{
-		AActor* Marker = It.Value().Get();
+		AActor* Marker = It.Value().Actor.Get();
 		if (!Wanted.Contains(It.Key()) || !IsValid(Marker))
 		{
 			if (IsValid(Marker))
@@ -605,12 +614,136 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 
 void UVTCOutlineSubsystem::ClearRemoteMarkers()
 {
-	for (const TPair<uint64, TWeakObjectPtr<AActor>>& Pair : RemoteMarkers)
+	for (const TPair<uint64, FTrackedMarker>& Pair : RemoteMarkers)
 	{
-		if (AActor* Marker = Pair.Value.Get())
+		if (AActor* Marker = Pair.Value.Actor.Get())
 		{
 			Marker->Destroy();
 		}
 	}
 	RemoteMarkers.Reset();
+}
+
+// ---------------------------------------------------------------------------------------------
+
+UTexture2D* UVTCOutlineSubsystem::EnsureDotTexture()
+{
+	if (DotTexture)
+	{
+		return DotTexture;
+	}
+
+	// A small white filled circle; the representation tints it per category.
+	constexpr int32 Size = 16;
+	constexpr float R = Size * 0.5f;
+	UTexture2D* Tex = UTexture2D::CreateTransient(Size, Size, PF_B8G8R8A8);
+	if (!Tex)
+	{
+		return nullptr;
+	}
+	Tex->SRGB = true;
+	Tex->Filter = TF_Bilinear;
+
+	FTexture2DMipMap& Mip = Tex->GetPlatformData()->Mips[0];
+	uint8* Data = static_cast<uint8*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
+	for (int32 Y = 0; Y < Size; ++Y)
+	{
+		for (int32 X = 0; X < Size; ++X)
+		{
+			const float D = static_cast<float>(FMath::Sqrt(FMath::Square(X + 0.5f - R) + FMath::Square(Y + 0.5f - R)));
+			const uint8 A = static_cast<uint8>(FMath::Clamp(255.f * (R - D), 0.f, 255.f));
+			uint8* Px = Data + (Y * Size + X) * 4;
+			Px[0] = Px[1] = Px[2] = 255;   // BGR white
+			Px[3] = A;                     // circular alpha
+		}
+	}
+	Mip.BulkData.Unlock();
+	Tex->UpdateResource();
+
+	DotTexture = Tex;
+	return DotTexture;
+}
+
+void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
+	const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines)
+{
+	UWorld* World = GetWorld();
+	if (!World || !Cfg.ShowOnMap)
+	{
+		ClearMapDots();
+		return;
+	}
+
+	AFGActorRepresentationManager* RepMgr = AFGActorRepresentationManager::Get(World);
+	UTexture2D* Icon = EnsureDotTexture();
+	if (!RepMgr || !Icon)
+	{
+		ClearMapDots();
+		return;
+	}
+
+	TSet<uint64> Wanted;
+	auto Want = [&](const FVector& Loc, EVTCCollectibleCategory Category)
+	{
+		const uint64 Key = MarkerKey(Loc, static_cast<uint8>(Category));
+		if (Wanted.Contains(Key))
+		{
+			return;
+		}
+		Wanted.Add(Key);
+		if (MapDots.Contains(Key))
+		{
+			return;
+		}
+		FLinearColor Colour = Cfg.GetFor(Category).GetLinearColor();
+		Colour.A = 1.f;
+		UFGActorRepresentation* Rep = RepMgr->CreateAndAddNewRepresentationNoActor(
+			Loc, Icon, Colour, /*lifeSpan*/ 0.f, /*compass*/ true, /*map*/ true,
+			ERepresentationType::RT_Default, nullptr);
+		if (Rep)
+		{
+			MapDots.Add(Key, Rep);
+		}
+	};
+
+	for (const TPair<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& Pair : LoadedOutlines)
+	{
+		if (const AActor* A = Pair.Key.Get())
+		{
+			Want(A->GetActorLocation(), Pair.Value);
+		}
+	}
+	for (const TPair<uint64, FTrackedMarker>& Pair : RemoteMarkers)
+	{
+		Want(Pair.Value.Location, Pair.Value.Category);
+	}
+
+	for (auto It = MapDots.CreateIterator(); It; ++It)
+	{
+		UFGActorRepresentation* Rep = It.Value().Get();
+		if (!Wanted.Contains(It.Key()) || !Rep)
+		{
+			if (Rep)
+			{
+				RepMgr->RemoveRepresentation(Rep);
+			}
+			It.RemoveCurrent();
+		}
+	}
+}
+
+void UVTCOutlineSubsystem::ClearMapDots()
+{
+	if (AFGActorRepresentationManager* RepMgr =
+		GetWorld() ? AFGActorRepresentationManager::Get(GetWorld()) : nullptr)
+	{
+		for (const TPair<uint64, TWeakObjectPtr<UFGActorRepresentation>>& Pair : MapDots)
+		{
+			if (UFGActorRepresentation* Rep = Pair.Value.Get())
+			{
+				RepMgr->RemoveRepresentation(Rep);
+			}
+		}
+	}
+	MapDots.Reset();
 }
