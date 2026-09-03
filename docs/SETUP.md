@@ -56,49 +56,45 @@ git clone https://github.com/satisfactorymodding/SatisfactoryModLoader D:/SML
 
 ---
 
-## Phase C — Create the mod plugin (via Alpakit) and drop this repo's code in
+## Phase C — Link this repo into the SML checkout
 
-The `.uplugin` and source files in `mod/ViewThroughCollectibles/` of this repo are the
-**intended end state**. The clean way to get there is to let Alpakit scaffold the plugin,
-then copy this repo's `Source/` over the generated one.
+`mod/ViewThroughCollectibles/` in this repo **is the complete Unreal plugin** — source,
+`.uplugin`, `Build.cs`, `Config/`, and the built `Content/*.uasset` assets. You don't
+scaffold anything with Alpakit; you just make the SML checkout point at this folder with a
+directory junction, so there's one copy and edits are always live in git.
 
 Paths here use this machine: SML at `F:\dev\satisfactory_mods\SatisfactoryModLoader`, this
 repo at `F:\dev\satisfactory_mods\view_throught_collectibles`.
 
-1. In the editor: **Window → Alpakit Dev** (dock it somewhere).
-2. **Create Mod** → template **"C++ & Blueprint"** → Mod Name: `ViewThroughCollectibles`
-   → leave *Show Content Directory* checked → **Create Mod**.
-   This generates `…\SatisfactoryModLoader\Mods\ViewThroughCollectibles\` with:
-   `ViewThroughCollectibles.uplugin`, `Config/`, `Content/`, and
-   `Source\ViewThroughCollectibles\` containing `ViewThroughCollectibles.Build.cs`,
-   `Public\ViewThroughCollectibles.h`, `Private\ViewThroughCollectibles.cpp` (the module
-   class — `IMPLEMENT_MODULE`, keep it).
-3. Close the editor.
-4. Add this mod's code — copy these 5 files from this repo into the generated
-   `Source\ViewThroughCollectibles\` (**keep** the generated module `.h`/`.cpp` and
-   `.Build.cs`):
-   - `Public\VTCTypes.h`, `Public\VTCConfig.h`, `Public\VTCOutlineSubsystem.h`
-   - `Private\VTCConfig.cpp`, `Private\VTCOutlineSubsystem.cpp`
-   The generated `.Build.cs` already lists `Engine, DeveloperSettings, RenderCore,
-   DummyHeaders, FactoryGame, SML` — nothing to merge. (This repo's copies of `.Build.cs`
-   / `.uplugin` are just reference; the generated ones win.)
-   > Or symlink so edits stay in git — but only the module folder, not over the generated
-   > `.uplugin`/`Config`/`Content`:
-   > `mklink /D "…\SatisfactoryModLoader\Mods\ViewThroughCollectibles\Source\ViewThroughCollectibles" "…\view_throught_collectibles\mod\ViewThroughCollectibles\Source\ViewThroughCollectibles"`
-   > (do this *instead of* letting Alpakit generate the Source folder, then hand-add the
-   > module `.h`/`.cpp` — fiddly; copying is simpler.)
-5. Confirm the generated `.uplugin` has `"CanContainContent": true` and a `SML` entry under
-   `"Plugins"` (Alpakit's game-feature template sets both).
-6. Regenerate VS project files (right-click `FactoryGame.uproject`) and build the
-   **FactoryEditor / Development / Win64** target with the editor closed.
-7. Open the editor. With *Show Plugin Content* on, you should see
-   **ViewThroughCollectibles Content**.
+1. Close the Unreal editor (it locks the plugin's DLLs).
+2. Create the junction. SML's game-feature mods live under `Mods\GameFeatures\<ModRef>\`.
+   From an ordinary (non-admin) PowerShell:
+   ```powershell
+   New-Item -ItemType Junction `
+     -Path   "F:\dev\satisfactory_mods\SatisfactoryModLoader\Mods\GameFeatures\ViewThroughCollectibles" `
+     -Target "F:\dev\satisfactory_mods\view_throught_collectibles\mod\ViewThroughCollectibles"
+   ```
+   (`cmd /c mklink /J "<Path>" "<Target>"` does the same thing.) The `Path` must not
+   already exist — delete or move any previous copy first.
+3. `Binaries/`, `Intermediate/` and `Saved/` get generated *inside* `mod/ViewThroughCollectibles/`
+   through the junction. They're in `.gitignore` — never commit them.
+4. Regenerate VS project files (right-click `FactoryGame.uproject` → *Generate Visual
+   Studio project files*) and build the **FactoryEditor / Development / Win64** target with
+   the editor closed.
+5. Open `FactoryGame.uproject`. With *Show Plugin Content* on you should see
+   **ViewThroughCollectibles Content** with the 5 assets already present.
 
-The C++ compiles at this point. Then build the assets (Phase D) and fix the Phase E items.
+The C++ compiles and the content assets load at this point — Phases D and E below are
+**reference only** (how those assets were built / how to regenerate them after a schema
+change), not steps you need to repeat for a fresh checkout.
 
 ---
 
-## Phase D — Build the config UI (SML ModConfiguration asset)
+## Phase D — Build the config UI (SML ModConfiguration asset) — *reference*
+
+> Already done — `Content/ViewThroughCollectibles_Config.uasset` and
+> `RootGameInstance_ViewThroughCollectibles.uasset` are in the repo. Follow this only if
+> you change the config schema and need to rebuild them.
 
 The in-game menu comes from a Blueprint asset, and SML **generates the C++ struct from
 it** — so the asset is the source of truth, and this repo's `VTCConfig.h` struct is a
@@ -112,7 +108,8 @@ placeholder that the generated header will replace.
    fields exactly as listed in [`CONTENT-ASSETS.md`](CONTENT-ASSETS.md) §3 (mirrors
    `FVTCConfigStruct`): `MaxDistanceMeters`/`RefreshIntervalSeconds`/`OutlineThicknessPixels`/
    `OccludedFillOpacity` (Float), `MaxSimultaneousOutlines` (Int), and one **Section** per
-   collectible type with `bEnabled` (Bool) + `Color` (**Color** property — real RGBA).
+   collectible type with `Enabled` (Bool) + `Color` (**String** — hex `RRGGBB`; SML 3.12
+   has no colour property type).
    Also build `MPC_VTCColors` and `M_VTCOutline` per §1–§2 of that doc.
 4. Create a **Game Instance Module** BP (right-click → Blueprint Class →
    `GameInstanceModule`) named `RootGameInstance_ViewThroughCollectibles`. Open it, tick
@@ -133,16 +130,15 @@ placeholder that the generated header will replace.
 
 ## Phase E — Resolve the remaining verification items
 
-Most API drift is already resolved against the local headers (see `FINDINGS.md`). What's
-left, marked `TODO(verify …)` in the source / docs:
+The C++ module and the content assets build clean. What's left can only be confirmed with
+the editor running or in-game, and is marked `TODO(verify …)` in the source / docs:
 
 | Where | What to confirm |
 |---|---|
-| `M_VTCOutline` Custom node | SceneTexture ids (SceneDepth=1, PostProcessInput0=14, CustomDepth=24, CustomStencil=25) against your engine build's SceneTexture node tooltips. |
+| `M_VTCOutline` Custom node | SceneTexture ids are confirmed against `MaterialTemplate.ush` (SceneDepth=1, CustomDepth=13, PostProcessInput0=14, CustomStencil=25). Left: that the material compiles and reads stencil 201–210 correctly on a live scene. |
 | `LoadCategoryTables()` flora entries | Folder names are mismatched — `Desc_Berry` = Beryl Nut? Pick one up in-game and check the item, or fix via `Game.ini` `[ViewThroughCollectibles.Categories]`. |
 | `BP_Crystal` mesh | Whether world power slugs use regular `UMeshComponent`s. If they're abstract/instanced, Custom Depth won't apply — outline the `AFGItemPickup` proxy mesh instead. |
 | `VTCConfig.cpp` `GetActiveConfig` | Replace body with the editor-generated accessor if its shape differs from `FillConfigurationStruct(FConfigId, FDynamicStructInfo)`. |
-| module `.cpp` | If you used the Alpakit "C++ and Blueprint" template, keep its `…Module.cpp` and delete this repo's `ViewThroughCollectiblesModule.cpp` (don't have two module implementations). |
 
 Build **Development Editor** after each round of changes.
 
@@ -150,27 +146,39 @@ Build **Development Editor** after each round of changes.
 
 ## Phase F — Package and test
 
-1. **Alpakit Dev** window → configure Dev Packaging Settings once (point it at your
-   Satisfactory install, enable "start game after packing" if you like).
-2. Tick `ViewThroughCollectibles` → **Alpakit Selected**. It builds Shipping + the DLL/PDB
-   and copies the mod into `<Satisfactory>/FactoryGame/Mods/`.
+1. **Alpakit** panel (main toolbar button, or *Window → Alpakit*). Open its settings:
+   - **Windows** tab → **Copy to Game Path** = your Satisfactory install
+     (`F:\Programme et jeux\Steam\steamapps\common\Satisfactory` on this machine),
+     **Launch Game Type** = `Steam` (or `None` to launch it yourself).
+   - **Disable the server targets.** This mod is client-only (`"RequiredOnRemote": false`
+     in the `.uplugin`, subsystem returns false on dedicated servers), so it has no server
+     side. Leaving Windows Server / Linux Server enabled makes packaging fail with
+     `Platform Linux is not a valid platform to build` unless you've also installed the
+     UE 5.6 Linux cross-compile toolchain — which you don't need. Package **Windows** only.
+2. Tick `ViewThroughCollectibles` → **Alpakit Selected**. It builds the Shipping DLL/PDB,
+   cooks `Content/`, and copies the mod into `<Satisfactory>/FactoryGame/Mods/ViewThroughCollectibles/`.
 3. Launch the game (or let Alpakit launch it). SMM in developer mode will list the mod.
 4. Run the checks in the repo `README.md` → "Verifying":
    - config menu shows all types + distance / thickness / fill;
    - singleplayer: coloured see-through outlines within distance, drop past it, live toggle,
      live colour change, dropped item outlines;
-   - multiplayer: host + client (and/or a dedicated server) — subsystem absent on the
-     dedicated server log, per-client independent, no replication warnings, save unchanged;
+   - multiplayer: host + client — per-client independent config, no replication warnings,
+     save unchanged; joining a server that does **not** have the mod succeeds (client-only)
+     and outlines still work for you;
    - perf: frame time OK in a slug-dense area at default `MaxSimultaneousOutlines`.
 
 ---
 
 ## Phase G — Iterate
 
-- Blueprint/asset changes: compile+save in editor, re-Alpakit.
+Because the checkout is a junction to this repo, editor asset saves and C++ edits land
+directly in `mod/ViewThroughCollectibles/` — `git status` in this repo shows them.
+
+- Blueprint/asset changes: compile+save in editor (writes into the repo), re-Alpakit.
 - C++ class-structure changes: close editor → build Development Editor → reopen.
 - C++ body-only changes: Unreal Live Coding (Ctrl+Alt+F11) usually suffices.
 - Config schema changes: re-run *Regenerate Configuration Structs*.
+- Commit `.uasset` changes as binary; keep `Binaries/ Intermediate/ Saved/` out of git.
 
 ## Troubleshooting seen on this machine
 

@@ -1,10 +1,14 @@
-# Unreal Engine / SML build artifacts (only relevant once symlinked into a SatisfactoryModLoader checkout)
+# Unreal Engine / SML build artifacts — generated inside mod/ViewThroughCollectibles/
+# once it's junctioned into a SatisfactoryModLoader checkout and built.
 Binaries/
 Intermediate/
 Saved/
 DerivedDataCache/
 *.sln
+*.VC.db
+*.VC.opendb
 .vs/
+*_BuiltData.uasset
 
 # Python
 __pycache__/

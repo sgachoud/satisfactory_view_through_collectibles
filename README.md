@@ -21,12 +21,17 @@ Each type is independently toggleable and has its own RGB outline colour.
   (`MPC_VTCColors`) that the subsystem updates live from the mod config.
 
 Custom Depth + stencil is already enabled in the base game (`r.CustomDepth=3`), so no
-project-level change is required.
+project-level change is required. While the subsystem is active it also forces
+`r.CustomDepthTemporalAAJitter 0` (restored on unload) so the outline doesn't inherit the
+TSR/TAA sub-pixel jitter and shimmer.
 
 ## Multiplayer
 
 Safe — the effect is entirely client-side and cosmetic:
 
+- The mod is **client-only** (`"RequiredOnRemote": false` in the `.uplugin`): a server
+  doesn't need it, and you can join servers that don't have it. Players without the mod are
+  unaffected.
 - The subsystem never runs on a dedicated server (`ShouldCreateSubsystem` returns false).
 - The only actor it spawns is a transient, client-local `APostProcessVolume` — never
   replicated, never saved (`RF_Transient`, no `IFGSaveInterface`).
@@ -50,14 +55,22 @@ options):
 ## Layout
 
 ```
-mod/ViewThroughCollectibles/        SML C++ plugin
+mod/ViewThroughCollectibles/        the complete SML plugin (junctioned into the SML checkout)
+  ViewThroughCollectibles.uplugin    "RequiredOnRemote": false — client-only, no server build
   Source/.../Public/VTCTypes.h        collectible categories (= stencil offsets) + per-type settings
   Source/.../Public/VTCConfig.h       SML config struct + live-config accessor
   Source/.../Private/VTCOutlineSubsystem.cpp   the whole effect
+  Content/Materials/M_VTCOutline       post-process outline material
+  Content/Materials/MPC_VTCColors      per-category colour / thickness parameters
+  Content/ViewThroughCollectibles_Config          SML ModConfiguration (the in-game menu)
+  Content/RootGameInstance_ViewThroughCollectibles GameInstanceModule (registers the config)
 docs/FINDINGS.md                     verified FactoryGame API + asset paths
 docs/CONTENT-ASSETS.md               exact build spec for M_VTCOutline / MPC_VTCColors / config assets
 docs/SETUP.md                        toolchain + integration walkthrough
 ```
+
+`Binaries/`, `Intermediate/`, `Saved/` appear in `mod/ViewThroughCollectibles/` once it's
+built through the SML checkout; they're gitignored.
 
 ## Building it
 
@@ -65,14 +78,17 @@ Requires Satisfactory's account-gated C++ toolchain. Full walkthrough in
 [docs/SETUP.md](docs/SETUP.md); asset specs in [docs/CONTENT-ASSETS.md](docs/CONTENT-ASSETS.md).
 Short version:
 
-1. Set up the toolchain and a `SatisfactoryModLoader` checkout (docs.ficsit.app).
-2. Alpakit → Create Mod → "C++ and Blueprint" template, name `ViewThroughCollectibles`;
-   copy/merge this repo's `Source/` into it.
-3. Build the four editor assets from `docs/CONTENT-ASSETS.md` (material, MPC,
-   ModConfiguration, GameInstanceModule).
-4. Build the Development Editor target; resolve any API drift (a few `TODO(verify …)`
-   comments remain — SceneTexture ids, flora descriptor names).
-5. Alpakit-deploy and test.
+1. Set up the toolchain and a `SatisfactoryModLoader` checkout (docs.ficsit.app) — custom
+   engine `5.6.1-CSS`, VS 2022 with **MSVC v14.38 x64/x86**, Wwise 2023.1.14.8770.
+2. Junction this repo's `mod/ViewThroughCollectibles/` into the checkout at
+   `Mods/GameFeatures/ViewThroughCollectibles/` (it's the whole plugin — source *and* the
+   four `Content/` assets; nothing to scaffold). See [docs/SETUP.md](docs/SETUP.md) Phase C.
+3. Regenerate VS project files, build the **FactoryEditor / Development / Win64** target.
+4. In Alpakit, disable the server targets (client-only mod — see below), point "Copy to
+   Game Path" at your Satisfactory install, **Alpakit Selected**, test.
+
+A few `TODO(verify …)` items remain — flora descriptor names, power-slug mesh type, the
+outline material's behaviour on a live scene — confirmable only in the editor / in-game.
 
 ## Verifying
 
@@ -83,20 +99,24 @@ No local build without the toolchain. Once it builds:
    coloured see-through outline; walking past the distance drops them within one refresh;
    toggling a type off or changing its colour updates live. Drop an item → it outlines (if
    Dropped Items is enabled).
-3. **Multiplayer** — host + a second client (or a dedicated server): the dedicated server
-   log shows the subsystem was not created; each client follows its own config and
+3. **Multiplayer** — host + a second client: each client follows its own config and
    position; no replication warnings; quitting leaves no residual actors, save unchanged.
+   Joining a server without the mod succeeds (client-only) and outlines still work for you.
 4. **Perf** — in a slug-dense area, confirm frame time is fine at the default
    `MaxSimultaneousOutlines`; lower it if not.
 
 ## Open verification items
 
-Not design problems — things only confirmable with the toolchain, marked `TODO(verify …)`
-in the source / docs:
+Not design problems — things only confirmable in the editor / in-game, marked
+`TODO(verify …)` in the source / docs:
 
-- SceneTexture ids in the `M_VTCOutline` Custom node (SceneDepth / PostProcessInput0 /
-  CustomDepth / CustomStencil).
 - Flora descriptor → in-game-name mapping (`Desc_Berry` folder ≠ Beryl Nut necessarily).
 - Whether world power slugs use regular `UMeshComponent`s (Custom Depth won't apply to
   abstract-instanced meshes — check `BP_Crystal`).
 - SML `UConfigManager::FillConfigurationStruct` call shape vs the generated accessor.
+- `M_VTCOutline` compiling and reading stencil correctly once applied to a live scene
+  (the SceneTexture ids 1/13/14/25 are confirmed against `MaterialTemplate.ush`).
+
+## Credits
+
+Designed and implemented with Claude Sonnet 5 by Anthropic.
