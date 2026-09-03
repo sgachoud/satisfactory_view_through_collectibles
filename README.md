@@ -17,12 +17,12 @@ Each type is independently toggleable and has its own RGB outline colour.
   Runtime player-dropped items are always found by a direct `AFGItemPickup_Spawnable` sweep.
 - For the nearest N within the configured distance, it writes a per-category **Custom Depth
   stencil value** (201–210) onto the collectible's mesh components.
-- Collectibles between the outline distance and **Remote Marker Max Distance** get a small
-  see-through marker sphere — same stencil, same colours — so you can see what's out there
-  before it renders. Positions come from the scannable registry in singleplayer / as the
+- Collectibles within the distance that *aren't* streamed in get a small see-through marker
+  sphere instead — same stencil, same colours — so nearby collectibles show even before
+  they render. Positions come from the scannable registry in singleplayer / as the
   listen-server host; on a remote client they're replicated from the server **if the server
   also has the mod** (a server-side subsystem feeds each client an owner-only list).
-  Without the mod on the server the markers simply don't appear and the outlines still work
+  Without the mod on the server the markers just don't appear and the outlines still work
   for whatever is loaded.
 - A packaged **post-process material** (`M_VTCOutline`) reads those stencil values and draws
   a coloured edge (and a faint fill where the collectible is hidden behind geometry).
@@ -60,8 +60,7 @@ options):
 
 | Setting | Meaning |
 |---|---|
-| **Max Distance (m)** | Collectibles farther than this from you are not outlined. |
-| **Remote Marker Max Distance (m)** | Collectibles out to this range get a see-through marker sphere before they render. 0 disables. On a remote client this needs the mod on the server too. |
+| **Max Distance (m)** | Collectibles farther than this from you are not outlined or markered. |
 | **Refresh Interval (s)** | How often the in-range set is recomputed. |
 | **Max Simultaneous Outlines** | Safety cap; nearest collectibles win. |
 | **Outline Thickness (px)** | Edge width in screen pixels. |

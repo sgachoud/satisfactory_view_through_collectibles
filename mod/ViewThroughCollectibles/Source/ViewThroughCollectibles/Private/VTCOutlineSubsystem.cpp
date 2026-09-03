@@ -441,12 +441,8 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		return;
 	}
 
-	const float MarkerMeters = Cfg.RemoteMarkerMaxDistanceMeters;
-	if (MarkerMeters <= 0.f)
-	{
-		ClearRemoteMarkers();
-		return;
-	}
+	// Markers stand in for outlines the client can't draw yet, so they use the same range.
+	const float MarkerMeters = FMath::Max(10.f, Cfg.MaxDistanceMeters);
 
 	if (!MarkerMesh)
 	{

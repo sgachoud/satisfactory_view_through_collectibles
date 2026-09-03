@@ -76,7 +76,9 @@ void UVTCServerFeedSubsystem::RefreshFeeds()
 	}
 
 	const FVTCConfigStruct Cfg = FVTCConfigStruct::GetActiveConfig(this);
-	const float MarkerMeters = Cfg.RemoteMarkerMaxDistanceMeters;
+	// Feed the same range the client outlines at — markers just stand in for outlines the
+	// client can't draw yet.
+	const float FeedMeters = FMath::Max(10.f, Cfg.MaxDistanceMeters);
 
 	auto EnsureComponent = [](APlayerController* PC) -> UVTCCollectibleFeedComponent*
 	{
@@ -89,19 +91,6 @@ void UVTCServerFeedSubsystem::RefreshFeeds()
 		Comp->SetIsReplicated(true);   // also registers it in the PC's replicated-components list
 		return Comp;
 	};
-
-	// Feature switched off (or misconfigured) — clear every player's feed and stop.
-	if (MarkerMeters <= 0.f)
-	{
-		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
-		{
-			if (APlayerController* PC = It->Get())
-			{
-				EnsureComponent(PC)->SetFeed(TArray<FVTCFedCollectible>());
-			}
-		}
-		return;
-	}
 
 	// Master list of live collectibles: position + category, built once per refresh.
 	struct FEntry { FVector Location; uint8 Category; };
@@ -126,7 +115,7 @@ void UVTCServerFeedSubsystem::RefreshFeeds()
 	Gather(Scan->GetAvailableItemPickups(), /*bDropPods*/ false);
 	Gather(Scan->GetAvailableDropPods(), /*bDropPods*/ true);
 
-	const double MarkerDistSq = FMath::Square(static_cast<double>(MarkerMeters) * 100.0);
+	const double FeedDistSq = FMath::Square(static_cast<double>(FeedMeters) * 100.0);
 
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{
@@ -148,7 +137,7 @@ void UVTCServerFeedSubsystem::RefreshFeeds()
 		TArray<FVTCFedCollectible> Feed;
 		for (const FEntry& E : All)
 		{
-			if (FVector::DistSquared(E.Location, PlayerLoc) > MarkerDistSq)
+			if (FVector::DistSquared(E.Location, PlayerLoc) > FeedDistSq)
 			{
 				continue;
 			}
