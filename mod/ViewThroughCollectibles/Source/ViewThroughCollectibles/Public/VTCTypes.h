@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Engine/NetSerialization.h"   // FVector_NetQuantize100
 #include "VTCTypes.generated.h"
 
 /**
@@ -52,4 +53,22 @@ struct FVTCTypeSettings
 
 	/** Parsed colour. Falls back to white on an unparseable string. Alpha defaults to 1. */
 	FLinearColor GetLinearColor() const;
+};
+
+/**
+ * One collectible the server tells a client about (via UVTCCollectibleFeedComponent) so the
+ * client can draw a see-through marker for collectibles too far away to have streamed in.
+ * Only exists in multiplayer when the server also has the mod.
+ */
+USTRUCT()
+struct FVTCFedCollectible
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FVector_NetQuantize100 Location = FVector::ZeroVector;
+
+	/** EVTCCollectibleCategory as a byte, for a compact wire size. */
+	UPROPERTY()
+	uint8 Category = 0;
 };

@@ -158,6 +158,8 @@ Follow `docs/SETUP.md` Phase D. The schema must mirror `FVTCConfigStruct` field-
 (the subsystem reads by name):
 
 - `MaxDistanceMeters` float, `RefreshIntervalSeconds` float, `MaxSimultaneousOutlines` int
+- `RemoteMarkerMaxDistanceMeters` float (multiplayer marker feed distance; 0 disables. The
+  C++ default is 250, so the mod works without this field — add it only to expose it in the menu.)
 - `OutlineThicknessPixels` float, `OccludedFillOpacity` float
 - Sections `HardDrivePods`, `PowerSlugsBlue`, `PowerSlugsYellow`, `PowerSlugsPurple`,
   `MercerSpheres`, `Somersloops`, `BerylNut`, `Paleberry`, `BaconAgaric`, `DroppedItems`,

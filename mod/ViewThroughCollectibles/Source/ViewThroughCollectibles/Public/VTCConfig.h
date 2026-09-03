@@ -27,6 +27,15 @@ struct VIEWTHROUGHCOLLECTIBLES_API FVTCConfigStruct
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "General")
 	int32 MaxSimultaneousOutlines = 200;
 
+	/**
+	 * Multiplayer only. When the server also has the mod, collectibles this far away
+	 * (metres) get a see-through marker even before they stream in. 0 disables it. Read by
+	 * the server as its feed radius and by the client as its marker cull distance; the
+	 * server value is the hard cap. No effect on a server without the mod.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "General")
+	float RemoteMarkerMaxDistanceMeters = 250.f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
 	float OutlineThicknessPixels = 2.f;
 

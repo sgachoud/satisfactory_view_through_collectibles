@@ -11,10 +11,17 @@ Each type is independently toggleable and has its own RGB outline colour.
 ## How it works
 
 - A client-side `UWorldSubsystem` asks the game's `AFGScannableSubsystem` for every
-  level-placed collectible (class + world position + collected/looted state), plus sweeps
-  for runtime player-dropped items.
+  level-placed collectible (class + world position + collected/looted state). That registry
+  is server-authoritative and unreplicated, so on a remote client it comes back empty and
+  the subsystem falls back to sweeping streamed-in `AFGItemPickup` / `AFGDropPod` actors.
+  Runtime player-dropped items are always found by a direct `AFGItemPickup_Spawnable` sweep.
 - For the nearest N within the configured distance, it writes a per-category **Custom Depth
   stencil value** (201–210) onto the collectible's mesh components.
+- **If the server also has the mod**, a server-side subsystem replicates the positions of
+  nearby collectibles to each client (which otherwise can't see collectibles beyond its
+  streaming range). The client places a small see-through marker sphere — same stencil,
+  same colours — where it hasn't streamed the real actor in yet. Without the mod on the
+  server this simply doesn't happen; the outlines still work for whatever is loaded.
 - A packaged **post-process material** (`M_VTCOutline`) reads those stencil values and draws
   a coloured edge (and a faint fill where the collectible is hidden behind geometry).
   Colours, thickness and fill opacity come from a Material Parameter Collection
@@ -27,15 +34,19 @@ TSR/TAA sub-pixel jitter and shimmer.
 
 ## Multiplayer
 
-Safe — the effect is entirely client-side and cosmetic:
+Safe — the effect is client-side and cosmetic:
 
 - The mod is **client-only** (`"RequiredOnRemote": false` in the `.uplugin`): a server
   doesn't need it, and you can join servers that don't have it. Players without the mod are
   unaffected.
-- The subsystem never runs on a dedicated server (`ShouldCreateSubsystem` returns false).
-- The only actor it spawns is a transient, client-local `APostProcessVolume` — never
-  replicated, never saved (`RF_Transient`, no `IFGSaveInterface`).
-- It only reads already-replicated collectible positions and sets rendering flags.
+- The client outline subsystem never runs on a dedicated server (`ShouldCreateSubsystem`
+  returns false). The only actors it spawns are transient, client-local: one
+  `APostProcessVolume` and the marker spheres — never replicated, never saved
+  (`RF_Transient`, no `IFGSaveInterface`).
+- **Optional server half**: if the server has the mod, `UVTCServerFeedSubsystem` runs there
+  and replicates a distance-limited list of `{position, category}` to each player's own
+  `UVTCCollectibleFeedComponent` (owner-only). It reads the existing scannable registry,
+  spawns nothing, never touches the save. Purely additive — absent, clients just fall back.
 - Config is per client. Two players in one session can run completely different settings.
 
 ## Configuration
@@ -46,6 +57,7 @@ options):
 | Setting | Meaning |
 |---|---|
 | **Max Distance (m)** | Collectibles farther than this from you are not outlined. |
+| **Remote Marker Max Distance (m)** | Multiplayer, server has the mod: collectibles this far out get a see-through marker before they load. 0 disables. No effect on a modless server. |
 | **Refresh Interval (s)** | How often the in-range set is recomputed. |
 | **Max Simultaneous Outlines** | Safety cap; nearest collectibles win. |
 | **Outline Thickness (px)** | Edge width in screen pixels. |
@@ -59,7 +71,10 @@ mod/ViewThroughCollectibles/        the complete SML plugin (junctioned into the
   ViewThroughCollectibles.uplugin    "RequiredOnRemote": false — client-only, no server build
   Source/.../Public/VTCTypes.h        collectible categories (= stencil offsets) + per-type settings
   Source/.../Public/VTCConfig.h       SML config struct + live-config accessor
-  Source/.../Private/VTCOutlineSubsystem.cpp   the whole effect
+  Source/.../Public/VTCCategoryTables.h        descriptor/class -> category, shared by both subsystems
+  Source/.../Private/VTCOutlineSubsystem.cpp   client: outlines + distant-collectible markers
+  Source/.../Private/VTCServerFeedSubsystem.cpp   server (optional): feeds nearby collectibles to clients
+  Source/.../Private/VTCCollectibleFeedComponent.cpp   replicated server->owning-client list
   Content/Materials/M_VTCOutline       post-process outline material
   Content/Materials/MPC_VTCColors      per-category colour / thickness parameters
   Content/ViewThroughCollectibles_Config          SML ModConfiguration (the in-game menu)

@@ -1,21 +1,22 @@
 #include "VTCOutlineSubsystem.h"
 
+#include "VTCCollectibleFeedComponent.h"
+
 #include "EngineUtils.h"
 #include "HAL/IConsoleManager.h"
 #include "TimerManager.h"
 #include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "Engine/PostProcessVolume.h"
+#include "Engine/StaticMesh.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Components/MeshComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Materials/MaterialInterface.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialParameterCollection.h"
 #include "Kismet/KismetMaterialLibrary.h"
-#include "Misc/ConfigCacheIni.h"
-#include "Misc/Parse.h"
-#include "UObject/ReflectedTypeAccessors.h"
 
 // FactoryGame. Header paths verified against SML 3.12 / FactoryGame CL 502094.
 #include "FGScannableSubsystem.h"
@@ -23,7 +24,6 @@
 #include "FGItemPickup.h"
 #include "FGItemPickup_Spawnable.h"
 #include "FGDropPod.h"
-#include "Resources/FGItemDescriptor.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogViewThroughCollectibles, Log, All);
 
@@ -31,6 +31,10 @@ const TCHAR* UVTCOutlineSubsystem::OutlineMaterialPath =
 	TEXT("/ViewThroughCollectibles/Materials/M_VTCOutline.M_VTCOutline");
 const TCHAR* UVTCOutlineSubsystem::ColorCollectionPath =
 	TEXT("/ViewThroughCollectibles/Materials/MPC_VTCColors.MPC_VTCColors");
+
+// Engine primitive used for the "distant collectible" marker. Satisfactory cooks
+// /Engine/BasicShapes (the game itself references Cylinder as a marker mesh).
+static const TCHAR* MarkerMeshPath = TEXT("/Engine/BasicShapes/Sphere.Sphere");
 
 // ---------------------------------------------------------------------------------------------
 
@@ -54,7 +58,7 @@ bool UVTCOutlineSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 void UVTCOutlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	LoadCategoryTables();
+	Tables.Load();
 }
 
 void UVTCOutlineSubsystem::Deinitialize()
@@ -64,6 +68,7 @@ void UVTCOutlineSubsystem::Deinitialize()
 		World->GetTimerManager().ClearTimer(RefreshTimerHandle);
 	}
 	ClearAllTrackedOutlines();
+	ClearRemoteMarkers();
 	RestoreCustomDepthJitterOverride();
 
 	if (IsValid(PostProcessVolume))
@@ -255,7 +260,7 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 			return;
 		}
 		EVTCCollectibleCategory Category;
-		if (!ResolveCategory(Actor, FallbackClass, Category))
+		if (!Tables.Resolve(Actor, FallbackClass, Category))
 		{
 			return;
 		}
@@ -267,6 +272,11 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	};
 
 	// --- Level-placed collectibles via the game's own scannable registry -------------------
+	// AFGScannableSubsystem is a server-side AFGSubsystem and its pickup/drop-pod arrays are
+	// Transient (not replicated) — a remote client gets empty lists from it. So we take
+	// whatever it has, then fall back to a direct actor sweep whenever it gave us nothing
+	// (i.e. on any real client, or before its cooked data is assigned).
+	int32 ScannableHits = 0;
 	if (AFGScannableSubsystem* Scan = AFGScannableSubsystem::Get(this))
 	{
 		for (const FWorldScannableData& Data : Scan->GetAvailableItemPickups())
@@ -276,6 +286,7 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 				continue; // already collected / destroyed
 			}
 			Consider(Data.Actor.Get(), Data.ActorClass.Get(), Data.ActorLocation);
+			++ScannableHits;
 		}
 		for (const FWorldScannableData& Data : Scan->GetAvailableDropPods())
 		{
@@ -284,11 +295,14 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 				continue;
 			}
 			Consider(Data.Actor.Get(), Data.ActorClass.Get(), Data.ActorLocation);
+			++ScannableHits;
 		}
 	}
-	else
+
+	if (ScannableHits == 0)
 	{
-		// Fallback: sweep actors directly (older saves / very early call).
+		// Sweep streamed-in actors directly. On a client this is the only source of
+		// collectibles; nearby ones are replicated normally so their meshes exist here.
 		for (TActorIterator<AFGItemPickup> It(World); It; ++It)
 		{
 			if (IsValid(*It) && !It->IsPickedUp())
@@ -354,50 +368,12 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 			TrackedOutlines.Add(Actor, Pair.Value);
 		}
 	}
+
+	// --- Distant collectibles the server told us about but we haven't streamed in ----------
+	RefreshRemoteMarkers(Cfg, PlayerLoc, Desired);
 }
 
 // ---------------------------------------------------------------------------------------------
-
-bool UVTCOutlineSubsystem::ResolveCategory(const AActor* Actor, const UClass* FallbackClass, EVTCCollectibleCategory& OutCategory) const
-{
-	if (Actor)
-	{
-		if (Actor->IsA(AFGDropPod::StaticClass()))
-		{
-			OutCategory = EVTCCollectibleCategory::HardDrivePod;
-			return true;
-		}
-		if (Actor->IsA(AFGItemPickup_Spawnable::StaticClass()))
-		{
-			OutCategory = EVTCCollectibleCategory::DroppedItem;
-			return true;
-		}
-		if (const AFGItemPickup* Pickup = Cast<AFGItemPickup>(Actor))
-		{
-			const TSubclassOf<UFGItemDescriptor> Desc = Pickup->GetPickupItemClass();
-			if (*Desc)
-			{
-				if (const EVTCCollectibleCategory* Found = CategoryByDescriptor.Find(FSoftClassPath(*Desc)))
-				{
-					OutCategory = *Found;
-					return true;
-				}
-			}
-		}
-	}
-
-	// Class-path fallback (used when the actor is not streamed in, or descriptor lookup missed).
-	for (const UClass* C = Actor ? Actor->GetClass() : FallbackClass;
-	     C && C != AActor::StaticClass(); C = C->GetSuperClass())
-	{
-		if (const EVTCCollectibleCategory* Found = CategoryByActorClass.Find(FSoftClassPath(C)))
-		{
-			OutCategory = *Found;
-			return true;
-		}
-	}
-	return false;
-}
 
 void UVTCOutlineSubsystem::ApplyCustomDepth(AActor* Actor, int32 StencilValue, bool bEnable)
 {
@@ -434,59 +410,152 @@ void UVTCOutlineSubsystem::ClearAllTrackedOutlines()
 
 // ---------------------------------------------------------------------------------------------
 
-void UVTCOutlineSubsystem::LoadCategoryTables()
+namespace
 {
-	CategoryByDescriptor.Reset();
-	CategoryByActorClass.Reset();
-
-	auto Desc = [this](const TCHAR* Path, EVTCCollectibleCategory Cat)
+	// Stable key for a fed collectible: 1 m-quantised world position (20 bits/axis) + category
+	// (low 4 bits). Collides only for collectibles ~1048 km apart on an axis.
+	uint64 MarkerKey(const FVector& Loc, uint8 Category)
 	{
-		CategoryByDescriptor.Add(FSoftClassPath(Path), Cat);
-	};
-	auto Cls = [this](const TCHAR* Path, EVTCCollectibleCategory Cat)
+		const uint64 X = static_cast<uint64>(static_cast<uint32>(FMath::RoundToInt(Loc.X / 100.0))) & 0xFFFFF;
+		const uint64 Y = static_cast<uint64>(static_cast<uint32>(FMath::RoundToInt(Loc.Y / 100.0))) & 0xFFFFF;
+		const uint64 Z = static_cast<uint64>(static_cast<uint32>(FMath::RoundToInt(Loc.Z / 100.0))) & 0xFFFFF;
+		return (static_cast<uint64>(Category) & 0xF) | (X << 4) | (Y << 24) | (Z << 44);
+	}
+}
+
+void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, const FVector& PlayerLoc,
+	const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines)
+{
+	UWorld* World = GetWorld();
+	if (!World)
 	{
-		CategoryByActorClass.Add(FSoftClassPath(Path), Cat);
-	};
+		return;
+	}
 
-	// Verified paths - see docs/FINDINGS.md.
-	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/Desc_Crystal.Desc_Crystal_C"), EVTCCollectibleCategory::PowerSlugMk1);
-	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/Desc_Crystal_mk2.Desc_Crystal_mk2_C"), EVTCCollectibleCategory::PowerSlugMk2);
-	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/Desc_Crystal_mk3.Desc_Crystal_mk3_C"), EVTCCollectibleCategory::PowerSlugMk3);
-	Desc(TEXT("/Game/FactoryGame/Prototype/WAT/Desc_WAT1.Desc_WAT1_C"), EVTCCollectibleCategory::MercerSphere);
-	Desc(TEXT("/Game/FactoryGame/Prototype/WAT/Desc_WAT2.Desc_WAT2_C"), EVTCCollectibleCategory::Somersloop);
-	// Folder names don't match in-game names: Desc_Berry = Beryl Nut, Desc_Nut = Paleberry,
-	// Desc_Shroom = Bacon Agaric. TODO verify in-game before shipping.
-	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Berry/Desc_Berry.Desc_Berry_C"), EVTCCollectibleCategory::BerylNut);
-	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Nut/Desc_Nut.Desc_Nut_C"), EVTCCollectibleCategory::Paleberry);
-	Desc(TEXT("/Game/FactoryGame/Resource/Environment/DesertShroom/Desc_Shroom.Desc_Shroom_C"), EVTCCollectibleCategory::BaconAgaric);
+	// The feed component only exists if the server also runs the mod.
+	const APlayerController* PC = World->GetFirstPlayerController();
+	const UVTCCollectibleFeedComponent* Feed =
+		PC ? PC->FindComponentByClass<UVTCCollectibleFeedComponent>() : nullptr;
 
-	Cls(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal.BP_Crystal_C"), EVTCCollectibleCategory::PowerSlugMk1);
-	Cls(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal_mk2.BP_Crystal_mk2_C"), EVTCCollectibleCategory::PowerSlugMk2);
-	Cls(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal_mk3.BP_Crystal_mk3_C"), EVTCCollectibleCategory::PowerSlugMk3);
-	Cls(TEXT("/Game/FactoryGame/Prototype/WAT/BP_WAT1.BP_WAT1_C"), EVTCCollectibleCategory::MercerSphere);
-	Cls(TEXT("/Game/FactoryGame/Prototype/WAT/BP_WAT2.BP_WAT2_C"), EVTCCollectibleCategory::Somersloop);
-
-	// Ini overrides (Game.ini): add/replace without recompiling.
-	//   [ViewThroughCollectibles.Categories]
-	//   +Descriptor=(Path="/Game/.../Desc_Foo.Desc_Foo_C", Category="Somersloop")
-	//   +ActorClass=(Path="/Game/.../BP_Foo.BP_Foo_C", Category="Somersloop")
-	auto ApplyOverrides = [](const TCHAR* Key, TMap<FSoftClassPath, EVTCCollectibleCategory>& Table)
+	const float MarkerMeters = Cfg.RemoteMarkerMaxDistanceMeters;
+	if (!Feed || MarkerMeters <= 0.f)
 	{
-		TArray<FString> Entries;
-		GConfig->GetArray(TEXT("ViewThroughCollectibles.Categories"), Key, Entries, GGameIni);
-		for (const FString& Entry : Entries)
+		ClearRemoteMarkers();
+		return;
+	}
+
+	const double MarkerDistSq = FMath::Square(static_cast<double>(MarkerMeters) * 100.0);
+	// A fed collectible this close to one we're already outlining is the same object — skip it.
+	const double DedupeDistSq = FMath::Square(400.0);
+
+	// Cache the positions of what we're already outlining, to suppress duplicate markers.
+	TArray<FVector, TInlineAllocator<64>> OutlinedLocs;
+	for (const TPair<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& Pair : LoadedOutlines)
+	{
+		if (const AActor* A = Pair.Key.Get())
 		{
-			FString PathStr, CategoryStr;
-			if (FParse::Value(*Entry, TEXT("Path="), PathStr) && FParse::Value(*Entry, TEXT("Category="), CategoryStr))
+			OutlinedLocs.Add(A->GetActorLocation());
+		}
+	}
+
+	TSet<uint64> Wanted;
+	for (const FVTCFedCollectible& Entry : Feed->GetFeed())
+	{
+		if (Entry.Category >= static_cast<uint8>(EVTCCollectibleCategory::MAX))
+		{
+			continue;
+		}
+		const EVTCCollectibleCategory Category = static_cast<EVTCCollectibleCategory>(Entry.Category);
+		if (!Cfg.GetFor(Category).Enabled)
+		{
+			continue;
+		}
+		const FVector Loc = Entry.Location;
+		if (FVector::DistSquared(Loc, PlayerLoc) > MarkerDistSq)
+		{
+			continue;
+		}
+		bool bAlreadyOutlined = false;
+		for (const FVector& OL : OutlinedLocs)
+		{
+			if (FVector::DistSquared(OL, Loc) <= DedupeDistSq)
 			{
-				const int64 Val = StaticEnum<EVTCCollectibleCategory>()->GetValueByNameString(CategoryStr);
-				if (Val != INDEX_NONE)
-				{
-					Table.Add(FSoftClassPath(PathStr), static_cast<EVTCCollectibleCategory>(Val));
-				}
+				bAlreadyOutlined = true;
+				break;
 			}
 		}
-	};
-	ApplyOverrides(TEXT("Descriptor"), CategoryByDescriptor);
-	ApplyOverrides(TEXT("ActorClass"), CategoryByActorClass);
+		if (bAlreadyOutlined)
+		{
+			continue;
+		}
+
+		const uint64 Key = MarkerKey(Loc, Entry.Category);
+		Wanted.Add(Key);
+		if (RemoteMarkers.Contains(Key))
+		{
+			continue;
+		}
+
+		// Spawn a transient, non-colliding marker whose mesh renders only into Custom Depth.
+		if (!MarkerMesh)
+		{
+			MarkerMesh = LoadObject<UStaticMesh>(nullptr, MarkerMeshPath);
+			if (!MarkerMesh)
+			{
+				UE_LOG(LogViewThroughCollectibles, Warning,
+					TEXT("Marker mesh %s not found - distant-collectible markers disabled."), MarkerMeshPath);
+				return;
+			}
+		}
+
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.ObjectFlags |= RF_Transient;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		AActor* Marker = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(Loc), SpawnParams);
+		if (!Marker)
+		{
+			continue;
+		}
+		Marker->SetActorEnableCollision(false);
+
+		UStaticMeshComponent* MeshComp = NewObject<UStaticMeshComponent>(Marker);
+		MeshComp->SetMobility(EComponentMobility::Movable);
+		Marker->SetRootComponent(MeshComp);
+		MeshComp->SetStaticMesh(MarkerMesh);
+		MeshComp->SetRelativeScale3D(FVector(0.5f));
+		MeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		MeshComp->SetCastShadow(false);
+		MeshComp->SetRenderInMainPass(false);        // invisible in normal rendering...
+		MeshComp->SetRenderCustomDepth(true);        // ...visible only as an outline
+		MeshComp->SetCustomDepthStencilValue(StencilFor(Category));
+		MeshComp->RegisterComponent();
+
+		RemoteMarkers.Add(Key, Marker);
+	}
+
+	// Drop markers no longer wanted (collected, out of range, or now streamed in and outlined).
+	for (auto It = RemoteMarkers.CreateIterator(); It; ++It)
+	{
+		AActor* Marker = It.Value().Get();
+		if (!Wanted.Contains(It.Key()) || !IsValid(Marker))
+		{
+			if (IsValid(Marker))
+			{
+				Marker->Destroy();
+			}
+			It.RemoveCurrent();
+		}
+	}
+}
+
+void UVTCOutlineSubsystem::ClearRemoteMarkers()
+{
+	for (const TPair<uint64, TWeakObjectPtr<AActor>>& Pair : RemoteMarkers)
+	{
+		if (AActor* Marker = Pair.Value.Get())
+		{
+			Marker->Destroy();
+		}
+	}
+	RemoteMarkers.Reset();
 }

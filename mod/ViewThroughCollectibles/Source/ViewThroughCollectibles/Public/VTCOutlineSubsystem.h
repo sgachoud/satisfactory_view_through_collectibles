@@ -4,6 +4,7 @@
 #include "Subsystems/WorldSubsystem.h"
 #include "VTCTypes.h"
 #include "VTCConfig.h"
+#include "VTCCategoryTables.h"
 #include "VTCOutlineSubsystem.generated.h"
 
 class AActor;
@@ -11,6 +12,7 @@ class APostProcessVolume;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UMaterialParameterCollection;
+class UStaticMesh;
 
 namespace VTC
 {
@@ -26,9 +28,14 @@ namespace VTC
  *  - blending a post-process material (M_VTCOutline) that turns those stencil values into
  *    outlines, with colours fed from a Material Parameter Collection (MPC_VTCColors).
  *
+ * When the server also has the mod, a UVTCCollectibleFeedComponent on the local
+ * PlayerController carries positions of collectibles that are too far to have streamed in;
+ * those get a small see-through marker sphere (invisible except in the outline pass) until
+ * the real actor loads.
+ *
  * Multiplayer: never runs on a dedicated server, never spawns/replicates a gameplay actor
- * (the post-process volume is transient and client-local), never writes the save. Reads
- * only already-replicated collectible positions. Fully independent per client.
+ * (the post-process volume and marker spheres are transient and client-local), never
+ * writes the save. Reads only already-replicated data. Fully independent per client.
  */
 UCLASS()
 class VIEWTHROUGHCOLLECTIBLES_API UVTCOutlineSubsystem : public UWorldSubsystem
@@ -48,16 +55,15 @@ private:
 	/** Push colours / thickness / fill from config into MPC_VTCColors (skips if unchanged). */
 	void PushConfigToMaterial(const FVTCConfigStruct& Cfg);
 
-	/** Categorise a collectible. Actor may be null (not streamed in) — then only FallbackClass is used. */
-	bool ResolveCategory(const AActor* Actor, const UClass* FallbackClass, EVTCCollectibleCategory& OutCategory) const;
-
 	/** Enable/disable Custom Depth + set the stencil value on every mesh component of Actor. */
 	static void ApplyCustomDepth(AActor* Actor, int32 StencilValue, bool bEnable);
 
 	void ClearAllTrackedOutlines();
 
-	/** Seed CategoryByDescriptor / CategoryByActorClass from built-in defaults + ini overrides. */
-	void LoadCategoryTables();
+	/** Server-fed distant collectibles -> transient marker spheres. No-op without a feed component. */
+	void RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, const FVector& PlayerLoc,
+		const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines);
+	void ClearRemoteMarkers();
 
 	static int32 StencilFor(EVTCCollectibleCategory Category)
 	{
@@ -78,8 +84,17 @@ private:
 	/** Actor -> category currently written into Custom Depth. */
 	TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory> TrackedOutlines;
 
-	TMap<FSoftClassPath, EVTCCollectibleCategory> CategoryByDescriptor;
-	TMap<FSoftClassPath, EVTCCollectibleCategory> CategoryByActorClass;
+	/**
+	 * Quantised world position -> the transient marker sphere placed there for a distant
+	 * collectible. Not a UPROPERTY (uint64 keys aren't UHT-supported); the world owns the
+	 * marker actors, we only weak-reference them.
+	 */
+	TMap<uint64, TWeakObjectPtr<AActor>> RemoteMarkers;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UStaticMesh> MarkerMesh;
+
+	FVTCCategoryTables Tables;
 
 	/** Last values pushed to the MPC, to avoid redundant per-tick writes. */
 	FVTCConfigStruct LastPushedConfig;

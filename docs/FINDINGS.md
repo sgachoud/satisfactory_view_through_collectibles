@@ -52,6 +52,21 @@ with collected-state filtering — far better than a `TActorIterator` sweep. Use
 positions/distance-cull, then outline the subset whose `Actor.Get()` is currently streamed
 in. Does **not** include runtime-spawned player-dropped items.
 
+**Server-authoritative.** `AFGScannableSubsystem : AFGSubsystem`, and `mAvailableItemPickups`
+/ `mAvailableDropPods` are `Transient` (not `Replicated`) — populated by
+`AFGWorldScannableDataGenerator` where the cooked data loads. On a **remote client** both
+arrays come back empty, so a client must fall back to `TActorIterator<AFGItemPickup>` +
+`TActorIterator<AFGDropPod>` (both are `AFGStaticReplicatedActor`, so nearby ones replicate
+in normally). The subsystem does this whenever the registry yields zero hits.
+
+The vanilla **Object Scanner** works around this with `Server_SetScannableDescriptor` +
+a single `ReplicatedUsing` `FScannableActorDetails mClosestObject` on the equipment — the
+server sends back only the closest match for the selected descriptor, no full list. This
+mod's optional `UVTCServerFeedSubsystem` does the equivalent for all categories: on the
+server it reads the registry and pushes a distance-limited `{pos, category}` array to each
+player's `UVTCCollectibleFeedComponent` (a runtime `UActorComponent` on the PlayerController,
+`SetIsReplicated(true)` → owner-only). No RPC in either direction; state replication only.
+
 ## Pickups (`FGItemPickup.h`, `FGItemPickup_Spawnable.h`)
 
 - `AFGItemPickup` (abstract) : `AFGStaticReplicatedActor` — base of slugs, spheres, sloops,
