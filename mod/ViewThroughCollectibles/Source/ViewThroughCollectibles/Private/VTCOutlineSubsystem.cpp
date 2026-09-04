@@ -411,11 +411,11 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	}
 
 	// --- Diff against what is currently written --------------------------------------------
+	// Clear outlines for actors no longer wanted (out of range, collected, gone).
 	for (auto It = TrackedOutlines.CreateIterator(); It; ++It)
 	{
 		AActor* Actor = It.Key().Get();
-		const EVTCCollectibleCategory* Now = IsValid(Actor) ? Desired.Find(Actor) : nullptr;
-		if (!Now || *Now != It.Value())
+		if (!IsValid(Actor) || !Desired.Contains(Actor))
 		{
 			if (IsValid(Actor))
 			{
@@ -424,10 +424,13 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 			It.RemoveCurrent();
 		}
 	}
+	// (Re)apply the stencil for everything wanted, every refresh. The component setters are
+	// guarded so this is near-free when already correct, and re-running it catches meshes
+	// that were built or streamed in *after* the actor was first tracked — e.g. a
+	// just-dropped item whose mesh isn't ready on the first pass, or a changed category.
 	for (const TPair<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& Pair : Desired)
 	{
-		AActor* Actor = Pair.Key.Get();
-		if (IsValid(Actor) && !TrackedOutlines.Contains(Actor))
+		if (AActor* Actor = Pair.Key.Get(); IsValid(Actor))
 		{
 			ApplyCustomDepth(Actor, StencilFor(Pair.Value), true);
 			TrackedOutlines.Add(Actor, Pair.Value);
