@@ -29,6 +29,7 @@
 #include "FGDropPod.h"
 #include "FGActorRepresentationManager.h"
 #include "FGActorRepresentation.h"
+#include "VTCMapRepresentation.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogViewThroughCollectibles, Log, All);
 
@@ -731,7 +732,7 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 		Colour.A = 1.f;
 		UFGActorRepresentation* Rep = RepMgr->CreateAndAddNewRepresentationNoActor(
 			Loc, Icon, Colour, /*lifeSpan*/ 0.f, /*compass*/ true, /*map*/ true,
-			ERepresentationType::RT_Default, nullptr);
+			ERepresentationType::RT_Default, UVTCMapRepresentation::StaticClass());
 		if (Rep)
 		{
 			MapDots.Add(Key, Rep);
