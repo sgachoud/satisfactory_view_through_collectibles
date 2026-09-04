@@ -70,6 +70,13 @@ struct VIEWTHROUGHCOLLECTIBLES_API FVTCConfigStruct
 	/** Returns the settings block for a category. */
 	const FVTCTypeSettings& GetFor(EVTCCollectibleCategory Category) const;
 
+	// Sanitised accessors — guard only against values that would break things: a timer
+	// interval below ~0.1 s would run the whole scan every frame and hang the game; a
+	// distance or count can't be negative. No upper limits.
+	float SafeRefreshIntervalSeconds() const { return FMath::Max(0.1f, RefreshIntervalSeconds); }
+	double MaxDistanceCm() const { return FMath::Max(0.f, MaxDistanceMeters) * 100.0; }
+	int32 SafeMaxSimultaneous() const { return FMath::Max(0, MaxSimultaneousOutlines); }
+
 	/** Reads the live SML configuration into a struct. Safe to call every refresh tick. */
 	static FVTCConfigStruct GetActiveConfig(const UObject* WorldContext);
 };

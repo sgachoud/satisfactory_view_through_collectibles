@@ -97,9 +97,11 @@ void UVTCOutlineSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 	const FVTCConfigStruct Cfg = FVTCConfigStruct::GetActiveConfig(this);
 	PushConfigToMaterial(Cfg);
 
-	const float Interval = FMath::Clamp(Cfg.RefreshIntervalSeconds, 0.1f, 5.f);
+	// The mod config subsystem may not be populated this early, so Cfg here can still be
+	// C++ defaults. RefreshOutlines re-arms from the live config once it changes.
+	ArmedRefreshInterval = Cfg.SafeRefreshIntervalSeconds();
 	InWorld.GetTimerManager().SetTimer(
-		RefreshTimerHandle, this, &UVTCOutlineSubsystem::RefreshOutlines, Interval, /*loop*/ true);
+		RefreshTimerHandle, this, &UVTCOutlineSubsystem::RefreshOutlines, ArmedRefreshInterval, /*loop*/ true);
 
 	RefreshOutlines();
 }
@@ -145,6 +147,25 @@ void UVTCOutlineSubsystem::SetupPostProcess()
 	PostProcessVolume->BlendWeight = 1.f;
 	PostProcessVolume->Priority = 1000000.f; // sit on top of the game's own volumes
 	PostProcessVolume->Settings.WeightedBlendables.Array.Add(FWeightedBlendable(1.f, OutlineMID));
+}
+
+void UVTCOutlineSubsystem::LogConfigIfChanged(const FVTCConfigStruct& Cfg)
+{
+	FString Digest = FString::Printf(
+		TEXT("dist=%g refresh=%g maxN=%d thick=%g fill=%g map=%d |"),
+		Cfg.MaxDistanceMeters, Cfg.RefreshIntervalSeconds, Cfg.MaxSimultaneousOutlines,
+		Cfg.OutlineThicknessPixels, Cfg.OccludedFillOpacity, Cfg.ShowOnMap ? 1 : 0);
+	for (uint8 i = 0; i < static_cast<uint8>(EVTCCollectibleCategory::MAX); ++i)
+	{
+		const FVTCTypeSettings& T = Cfg.GetFor(static_cast<EVTCCollectibleCategory>(i));
+		Digest += FString::Printf(TEXT(" %d:%d/%s"), i, T.Enabled ? 1 : 0, *T.Color);
+	}
+
+	if (Digest != LastLoggedConfigDigest)
+	{
+		LastLoggedConfigDigest = Digest;
+		UE_LOG(LogViewThroughCollectibles, Display, TEXT("effective config -> %s"), *Digest);
+	}
 }
 
 void UVTCOutlineSubsystem::PushConfigToMaterial(const FVTCConfigStruct& Cfg)
@@ -245,13 +266,27 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	}
 
 	const FVTCConfigStruct Cfg = FVTCConfigStruct::GetActiveConfig(this);
+	LogConfigIfChanged(Cfg);
 	PushConfigToMaterial(Cfg);
 
+	// Re-arm the refresh timer if the configured interval changed (it's set live from the
+	// menu, and the value at OnWorldBeginPlay may have been a default).
+	const float DesiredInterval = Cfg.SafeRefreshIntervalSeconds();
+	if (!FMath::IsNearlyEqual(DesiredInterval, ArmedRefreshInterval))
+	{
+		ArmedRefreshInterval = DesiredInterval;
+		World->GetTimerManager().SetTimer(
+			RefreshTimerHandle, this, &UVTCOutlineSubsystem::RefreshOutlines, DesiredInterval, /*loop*/ true);
+	}
+
 	const FVector PlayerLoc = LocalPawn->GetActorLocation();
-	const double MaxDistSq = FMath::Square(static_cast<double>(FMath::Max(10.f, Cfg.MaxDistanceMeters)) * 100.0);
-	const int32 MaxOutlines = FMath::Clamp(Cfg.MaxSimultaneousOutlines, 1, 2048);
+	const double MaxDistSq = FMath::Square(Cfg.MaxDistanceCm());
+	const int32 MaxOutlines = Cfg.SafeMaxSimultaneous();
 
 	TArray<FCandidate> Candidates;
+	// Nearby collectibles from the registry, streamed or not — the marker pass reuses this
+	// so the registry is walked once per refresh, not twice.
+	TArray<FVTCFedCollectible> RegistryNearby;
 
 	auto Consider = [&](AActor* Actor, const UClass* FallbackClass, const FVector& Loc)
 	{
@@ -285,23 +320,47 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	int32 ScannableHits = 0;
 	if (AFGScannableSubsystem* Scan = AFGScannableSubsystem::Get(this))
 	{
+		auto Scan1 = [&](const FWorldScannableData& Data)
+		{
+			++ScannableHits;
+			const double D = FVector::DistSquared(Data.ActorLocation, PlayerLoc);
+			if (D > MaxDistSq)
+			{
+				return;
+			}
+			AActor* Actor = Data.Actor.Get();
+			EVTCCollectibleCategory Category;
+			if (!Tables.Resolve(Actor, Data.ActorClass.Get(), Category))
+			{
+				return;
+			}
+			if (!Cfg.GetFor(Category).Enabled)
+			{
+				return;
+			}
+			FVTCFedCollectible F;
+			F.Location = Data.ActorLocation;
+			F.Category = static_cast<uint8>(Category);
+			RegistryNearby.Add(F);
+			// Also outline it if it's streamed in.
+			if (IsValid(Actor) && !Actor->IsActorBeingDestroyed())
+			{
+				Candidates.Add({ Actor, Category, D });
+			}
+		};
 		for (const FWorldScannableData& Data : Scan->GetAvailableItemPickups())
 		{
-			if (!Scan->DoesPickupExist(Data.ActorGuid))
+			if (Scan->DoesPickupExist(Data.ActorGuid))
 			{
-				continue; // already collected / destroyed
+				Scan1(Data);
 			}
-			Consider(Data.Actor.Get(), Data.ActorClass.Get(), Data.ActorLocation);
-			++ScannableHits;
 		}
 		for (const FWorldScannableData& Data : Scan->GetAvailableDropPods())
 		{
-			if (Scan->HasDropPodBeenLooted(Data.ActorGuid))
+			if (!Scan->HasDropPodBeenLooted(Data.ActorGuid))
 			{
-				continue;
+				Scan1(Data);
 			}
-			Consider(Data.Actor.Get(), Data.ActorClass.Get(), Data.ActorLocation);
-			++ScannableHits;
 		}
 	}
 
@@ -376,7 +435,7 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	}
 
 	// --- Distant collectibles (registry or server feed) we haven't streamed in ------------
-	RefreshRemoteMarkers(Cfg, PlayerLoc, Desired);
+	RefreshRemoteMarkers(Cfg, PlayerLoc, Desired, RegistryNearby, /*bHaveRegistry*/ ScannableHits > 0);
 
 	// --- Map / compass dots ---------------------------------------------------------------
 	RefreshMapDots(Cfg, Desired);
@@ -433,16 +492,14 @@ namespace
 }
 
 void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, const FVector& PlayerLoc,
-	const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines)
+	const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines,
+	const TArray<FVTCFedCollectible>& RegistryNearby, bool bHaveRegistry)
 {
 	UWorld* World = GetWorld();
 	if (!World)
 	{
 		return;
 	}
-
-	// Markers stand in for outlines the client can't draw yet, so they use the same range.
-	const float MarkerMeters = FMath::Max(10.f, Cfg.MaxDistanceMeters);
 
 	if (!MarkerMesh)
 	{
@@ -456,36 +513,11 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		}
 	}
 
-	// Candidate positions come from whichever source we have:
-	//  - solo / listen-server host: the local AFGScannableSubsystem registry (has every
-	//    collectible regardless of streaming),
-	//  - remote client: the server-fed list on our PlayerController's feed component,
-	//  - neither: no markers.
-	TArray<FVTCFedCollectible> Candidates;
-	if (AFGScannableSubsystem* Scan = AFGScannableSubsystem::Get(this))
-	{
-		auto Gather = [&](const TArray<FWorldScannableData>& Data, bool bDropPods)
-		{
-			for (const FWorldScannableData& D : Data)
-			{
-				if (bDropPods ? Scan->HasDropPodBeenLooted(D.ActorGuid) : !Scan->DoesPickupExist(D.ActorGuid))
-				{
-					continue;
-				}
-				EVTCCollectibleCategory Cat;
-				if (Tables.Resolve(D.Actor.Get(), D.ActorClass.Get(), Cat))
-				{
-					FVTCFedCollectible F;
-					F.Location = D.ActorLocation;
-					F.Category = static_cast<uint8>(Cat);
-					Candidates.Add(F);
-				}
-			}
-		};
-		Gather(Scan->GetAvailableItemPickups(), /*bDropPods*/ false);
-		Gather(Scan->GetAvailableDropPods(), /*bDropPods*/ true);
-	}
-	if (Candidates.Num() == 0)
+	// Positions: the registry's nearby set (already gathered by RefreshOutlines) when we're
+	// the authority; otherwise the server-fed list on our PlayerController.
+	TArray<FVTCFedCollectible> FeedCopy;
+	const TArray<FVTCFedCollectible>* Candidates = &RegistryNearby;
+	if (!bHaveRegistry)
 	{
 		const APlayerController* PC = World->GetFirstPlayerController();
 		const UVTCCollectibleFeedComponent* Feed =
@@ -495,10 +527,11 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 			ClearRemoteMarkers();
 			return;
 		}
-		Candidates = Feed->GetFeed();
+		FeedCopy = Feed->GetFeed();
+		Candidates = &FeedCopy;
 	}
 
-	const double MarkerDistSq = FMath::Square(static_cast<double>(MarkerMeters) * 100.0);
+	const double MarkerDistSq = FMath::Square(Cfg.MaxDistanceCm());
 	// A candidate this close to one we're already outlining is the same object — skip it.
 	const double DedupeDistSq = FMath::Square(400.0);
 
@@ -515,7 +548,7 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 	// Filter to markers we want this tick, nearest first, capped to the outline budget.
 	struct FWantedMarker { uint64 Key; FVector Loc; EVTCCollectibleCategory Category; double DistSq; };
 	TArray<FWantedMarker> WantedList;
-	for (const FVTCFedCollectible& Entry : Candidates)
+	for (const FVTCFedCollectible& Entry : *Candidates)
 	{
 		if (Entry.Category >= static_cast<uint8>(EVTCCollectibleCategory::MAX))
 		{
@@ -549,7 +582,7 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 	}
 
 	WantedList.Sort([](const FWantedMarker& A, const FWantedMarker& B) { return A.DistSq < B.DistSq; });
-	const int32 MaxMarkers = FMath::Clamp(Cfg.MaxSimultaneousOutlines, 1, 2048);
+	const int32 MaxMarkers = Cfg.SafeMaxSimultaneous();
 	if (WantedList.Num() > MaxMarkers)
 	{
 		WantedList.SetNum(MaxMarkers);

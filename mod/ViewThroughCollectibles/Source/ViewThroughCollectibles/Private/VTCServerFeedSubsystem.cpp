@@ -78,7 +78,7 @@ void UVTCServerFeedSubsystem::RefreshFeeds()
 	const FVTCConfigStruct Cfg = FVTCConfigStruct::GetActiveConfig(this);
 	// Feed the same range the client outlines at — markers just stand in for outlines the
 	// client can't draw yet.
-	const float FeedMeters = FMath::Max(10.f, Cfg.MaxDistanceMeters);
+	const double FeedDistSq = FMath::Square(Cfg.MaxDistanceCm());
 
 	auto EnsureComponent = [](APlayerController* PC) -> UVTCCollectibleFeedComponent*
 	{
@@ -114,8 +114,6 @@ void UVTCServerFeedSubsystem::RefreshFeeds()
 	};
 	Gather(Scan->GetAvailableItemPickups(), /*bDropPods*/ false);
 	Gather(Scan->GetAvailableDropPods(), /*bDropPods*/ true);
-
-	const double FeedDistSq = FMath::Square(static_cast<double>(FeedMeters) * 100.0);
 
 	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
 	{

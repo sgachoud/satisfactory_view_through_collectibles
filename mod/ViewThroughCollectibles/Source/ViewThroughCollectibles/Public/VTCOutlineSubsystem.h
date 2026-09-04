@@ -63,9 +63,11 @@ private:
 
 	void ClearAllTrackedOutlines();
 
-	/** Distant collectibles (registry or server feed) -> transient marker spheres. */
+	/** Distant collectibles -> transient marker spheres. Sourced from RegistryNearby when
+	 *  bHaveRegistry (authority), else from the replicated feed component (remote client). */
 	void RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, const FVector& PlayerLoc,
-		const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines);
+		const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines,
+		const TArray<FVTCFedCollectible>& RegistryNearby, bool bHaveRegistry);
 	void ClearRemoteMarkers();
 
 	/** Category-coloured map/compass dots for everything currently outlined or markered. */
@@ -89,6 +91,8 @@ private:
 	TObjectPtr<UMaterialParameterCollection> ColorCollection;
 
 	FTimerHandle RefreshTimerHandle;
+	/** Interval the refresh timer is currently armed at; re-armed from config when it changes. */
+	float ArmedRefreshInterval = -1.f;
 
 	/** Actor -> category currently written into Custom Depth. */
 	TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory> TrackedOutlines;
@@ -124,6 +128,10 @@ private:
 	/** Last values pushed to the MPC, to avoid redundant per-tick writes. */
 	FVTCConfigStruct LastPushedConfig;
 	bool bConfigEverPushed = false;
+
+	/** Log the effective config once, and again whenever it changes, so binding is verifiable. */
+	void LogConfigIfChanged(const FVTCConfigStruct& Cfg);
+	FString LastLoggedConfigDigest;
 
 	/**
 	 * We force r.CustomDepthTemporalAAJitter to 0 while active so the outline stops
