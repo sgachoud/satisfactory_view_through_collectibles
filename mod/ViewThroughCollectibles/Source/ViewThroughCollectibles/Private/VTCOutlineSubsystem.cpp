@@ -10,8 +10,6 @@
 #include "Engine/PostProcessVolume.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/Texture2D.h"
-#include "TextureResource.h"
-#include "PixelFormat.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "Components/MeshComponent.h"
@@ -27,9 +25,7 @@
 #include "FGItemPickup.h"
 #include "FGItemPickup_Spawnable.h"
 #include "FGDropPod.h"
-#include "FGActorRepresentationManager.h"
-#include "FGActorRepresentation.h"
-#include "VTCMapRepresentation.h"
+#include "VTCMapMarkerActor.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogViewThroughCollectibles, Log, All);
 
@@ -659,6 +655,13 @@ void UVTCOutlineSubsystem::ClearRemoteMarkers()
 
 // ---------------------------------------------------------------------------------------------
 
+// Properly imported per the Icon Library docs' guidance for in-game icon textures (Mip Gen
+// Settings = FromTextureGroup, Texture Group = UI Streamable, Compression = Default DX11).
+// A runtime CreateTransient texture (no texture group, no streaming setup) rendered as an
+// untinted placeholder square on both map and compass — testing whether a properly
+// imported, streaming-compatible texture is what the map/compass image widget actually needs.
+static const TCHAR* DotTexturePath = TEXT("/ViewThroughCollectibles/Textures/T_VTCDot.T_VTCDot");
+
 UTexture2D* UVTCOutlineSubsystem::EnsureDotTexture()
 {
 	if (DotTexture)
@@ -666,34 +669,13 @@ UTexture2D* UVTCOutlineSubsystem::EnsureDotTexture()
 		return DotTexture;
 	}
 
-	// A small white filled circle; the representation tints it per category.
-	constexpr int32 Size = 16;
-	constexpr float R = Size * 0.5f;
-	UTexture2D* Tex = UTexture2D::CreateTransient(Size, Size, PF_B8G8R8A8);
-	if (!Tex)
+	DotTexture = LoadObject<UTexture2D>(nullptr, DotTexturePath);
+	if (!DotTexture)
 	{
-		return nullptr;
+		UE_LOG(LogViewThroughCollectibles, Warning,
+			TEXT("Map dot texture %s not found - import T_VTCDot.png into that path. Map/compass dots disabled until then."),
+			DotTexturePath);
 	}
-	Tex->SRGB = true;
-	Tex->Filter = TF_Bilinear;
-
-	FTexture2DMipMap& Mip = Tex->GetPlatformData()->Mips[0];
-	uint8* Data = static_cast<uint8*>(Mip.BulkData.Lock(LOCK_READ_WRITE));
-	for (int32 Y = 0; Y < Size; ++Y)
-	{
-		for (int32 X = 0; X < Size; ++X)
-		{
-			const float D = static_cast<float>(FMath::Sqrt(FMath::Square(X + 0.5f - R) + FMath::Square(Y + 0.5f - R)));
-			const uint8 A = static_cast<uint8>(FMath::Clamp(255.f * (R - D), 0.f, 255.f));
-			uint8* Px = Data + (Y * Size + X) * 4;
-			Px[0] = Px[1] = Px[2] = 255;   // BGR white
-			Px[3] = A;                     // circular alpha
-		}
-	}
-	Mip.BulkData.Unlock();
-	Tex->UpdateResource();
-
-	DotTexture = Tex;
 	return DotTexture;
 }
 
@@ -707,9 +689,8 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 		return;
 	}
 
-	AFGActorRepresentationManager* RepMgr = AFGActorRepresentationManager::Get(World);
 	UTexture2D* Icon = EnsureDotTexture();
-	if (!RepMgr || !Icon)
+	if (!Icon)
 	{
 		ClearMapDots();
 		return;
@@ -730,12 +711,24 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 		}
 		FLinearColor Colour = Cfg.GetFor(Category).GetLinearColor();
 		Colour.A = 1.f;
-		UFGActorRepresentation* Rep = RepMgr->CreateAndAddNewRepresentationNoActor(
-			Loc, Icon, Colour, /*lifeSpan*/ 0.f, /*compass*/ true, /*map*/ true,
-			ERepresentationType::RT_Default, UVTCMapRepresentation::StaticClass());
-		if (Rep)
+
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.ObjectFlags |= RF_Transient;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		AVTCMapMarkerActor* MarkerActor = World->SpawnActor<AVTCMapMarkerActor>(
+			AVTCMapMarkerActor::StaticClass(), FTransform(Loc), SpawnParams);
+		if (!MarkerActor)
 		{
-			MapDots.Add(Key, Rep);
+			return;
+		}
+		MarkerActor->Init(Icon, Colour);
+		if (MarkerActor->AddAsRepresentation())
+		{
+			MapDots.Add(Key, MarkerActor);
+		}
+		else
+		{
+			MarkerActor->Destroy();
 		}
 	};
 
@@ -753,12 +746,12 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 
 	for (auto It = MapDots.CreateIterator(); It; ++It)
 	{
-		UFGActorRepresentation* Rep = It.Value().Get();
-		if (!Wanted.Contains(It.Key()) || !Rep)
+		AVTCMapMarkerActor* MarkerActor = It.Value().Get();
+		if (!Wanted.Contains(It.Key()) || !IsValid(MarkerActor))
 		{
-			if (Rep)
+			if (IsValid(MarkerActor))
 			{
-				RepMgr->RemoveRepresentation(Rep);
+				MarkerActor->Destroy();   // EndPlay() removes the representation
 			}
 			It.RemoveCurrent();
 		}
@@ -767,15 +760,11 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 
 void UVTCOutlineSubsystem::ClearMapDots()
 {
-	if (AFGActorRepresentationManager* RepMgr =
-		GetWorld() ? AFGActorRepresentationManager::Get(GetWorld()) : nullptr)
+	for (const TPair<uint64, TWeakObjectPtr<AVTCMapMarkerActor>>& Pair : MapDots)
 	{
-		for (const TPair<uint64, TWeakObjectPtr<UFGActorRepresentation>>& Pair : MapDots)
+		if (AVTCMapMarkerActor* MarkerActor = Pair.Value.Get())
 		{
-			if (UFGActorRepresentation* Rep = Pair.Value.Get())
-			{
-				RepMgr->RemoveRepresentation(Rep);
-			}
+			MarkerActor->Destroy();   // EndPlay() removes the representation
 		}
 	}
 	MapDots.Reset();

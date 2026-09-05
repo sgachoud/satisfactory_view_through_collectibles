@@ -14,7 +14,7 @@ class UMaterialInstanceDynamic;
 class UMaterialParameterCollection;
 class UStaticMesh;
 class UTexture2D;
-class UFGActorRepresentation;
+class AVTCMapMarkerActor;
 
 namespace VTC
 {
@@ -114,8 +114,8 @@ private:
 	};
 	TMap<uint64, FTrackedMarker> RemoteMarkers;
 
-	/** Quantised world position -> the map/compass representation dot placed there. */
-	TMap<uint64, TWeakObjectPtr<UFGActorRepresentation>> MapDots;
+	/** Quantised world position -> the transient marker actor registered as its map/compass dot. */
+	TMap<uint64, TWeakObjectPtr<AVTCMapMarkerActor>> MapDots;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMesh> MarkerMesh;

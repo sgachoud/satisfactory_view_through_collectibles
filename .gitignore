@@ -10,6 +10,9 @@ DerivedDataCache/
 .vs/
 *_BuiltData.uasset
 
+# Staging files for editor import (not part of the mod once imported)
+/_import_assets/
+
 # Python
 __pycache__/
 *.pyc
