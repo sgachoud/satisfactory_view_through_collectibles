@@ -92,8 +92,8 @@ player's `UVTCCollectibleFeedComponent` (a runtime `UActorComponent` on the Play
 | Power slug blue | `/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal.BP_Crystal_C` | `Desc_Crystal_C` |
 | Power slug yellow | `.../Crystal/BP_Crystal_mk2.BP_Crystal_mk2_C` | `Desc_Crystal_mk2_C` |
 | Power slug purple | `.../Crystal/BP_Crystal_mk3.BP_Crystal_mk3_C` | `Desc_Crystal_mk3_C` |
-| Mercer Sphere | `/Game/FactoryGame/Prototype/WAT/BP_WAT1.BP_WAT1_C` | `Desc_WAT1_C` |
-| Somersloop | `/Game/FactoryGame/Prototype/WAT/BP_WAT2.BP_WAT2_C` | `Desc_WAT2_C` |
+| Somersloop | `/Game/FactoryGame/Prototype/WAT/BP_WAT1.BP_WAT1_C` | `Desc_WAT1_C` |
+| Mercer Sphere | `/Game/FactoryGame/Prototype/WAT/BP_WAT2.BP_WAT2_C` | `Desc_WAT2_C` |
 | Beryl Nut | *(no dedicated BP)* | `/Game/FactoryGame/Resource/Environment/Berry/Desc_Berry.Desc_Berry_C` |
 | Paleberry | *(no dedicated BP)* | `/Game/FactoryGame/Resource/Environment/Nut/Desc_Nut.Desc_Nut_C` |
 | Bacon Agaric | *(no dedicated BP)* | `/Game/FactoryGame/Resource/Environment/DesertShroom/Desc_Shroom.Desc_Shroom_C` |

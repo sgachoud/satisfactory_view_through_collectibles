@@ -25,7 +25,9 @@
 #include "FGItemPickup.h"
 #include "FGItemPickup_Spawnable.h"
 #include "FGDropPod.h"
-#include "VTCMapMarkerActor.h"
+#include "FGActorRepresentationManager.h"
+#include "FGActorRepresentation.h"
+#include "VTCMapRepresentation.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogViewThroughCollectibles, Log, All);
 
@@ -280,6 +282,30 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	const double MaxDistSq = FMath::Square(Cfg.MaxDistanceCm());
 	const int32 MaxOutlines = Cfg.SafeMaxSimultaneous();
 
+	// Remote client, server also running the mod: an ephemeral feed component is replicated
+	// onto our PlayerController. It carries the authoritative, collected-filtered set, so when
+	// it's present we must NOT fall back to the map's raw scan data (which can't tell what
+	// other players have already picked up).
+	UVTCCollectibleFeedComponent* FeedComp =
+		PC ? PC->FindComponentByClass<UVTCCollectibleFeedComponent>() : nullptr;
+	const bool bHasServerFeed = FeedComp != nullptr;
+
+	// Tell the server what WE want to see - it has no other way to know our own Max
+	// Distance/Max Simultaneous, only its own local config. Only send when it actually
+	// changes; this runs every refresh and the RPC is reliable.
+	if (FeedComp)
+	{
+		const float DesiredDistCm = Cfg.MaxDistanceCm();
+		const int32 DesiredMaxEntries = MaxOutlines;
+		if (!FMath::IsNearlyEqual(DesiredDistCm, LastReportedMaxDistanceCm) ||
+			DesiredMaxEntries != LastReportedMaxEntries)
+		{
+			LastReportedMaxDistanceCm = DesiredDistCm;
+			LastReportedMaxEntries = DesiredMaxEntries;
+			FeedComp->Server_ReportRangePreference(DesiredDistCm, DesiredMaxEntries);
+		}
+	}
+
 	TArray<FCandidate> Candidates;
 	// Nearby collectibles from the registry, streamed or not — the marker pass reuses this
 	// so the registry is walked once per refresh, not twice.
@@ -310,12 +336,16 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	};
 
 	// --- Level-placed collectibles via the game's own scannable registry -------------------
-	// AFGScannableSubsystem is a server-side AFGSubsystem and its pickup/drop-pod arrays are
-	// Transient (not replicated) — a remote client gets empty lists from it. So we take
-	// whatever it has, then fall back to a direct actor sweep whenever it gave us nothing
-	// (i.e. on any real client, or before its cooked data is assigned).
+	// AFGScannableSubsystem's position arrays (mAvailableItemPickups/mAvailableDropPods) get
+	// populated by a level-placed generator actor on EVERY machine, client included — but its
+	// collected-state sets (mDestroyedPickups/mLootedDropPods) are SaveGame data that only
+	// loads when we load a save ourselves. A remote client never does, so on a client those
+	// stay empty forever and DoesPickupExist()/HasDropPodBeenLooted() silently claim nothing
+	// is collected. So this registry is only trustworthy where we're actually authoritative
+	// (solo or listen host) — gate on net mode, not on whether the arrays happen to have data.
+	const bool bIsAuthority = World->GetNetMode() != NM_Client;
 	int32 ScannableHits = 0;
-	if (AFGScannableSubsystem* Scan = AFGScannableSubsystem::Get(this))
+	if (AFGScannableSubsystem* Scan = bIsAuthority ? AFGScannableSubsystem::Get(this) : nullptr)
 	{
 		auto Scan1 = [&](const FWorldScannableData& Data)
 		{
@@ -361,10 +391,70 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 		}
 	}
 
-	if (ScannableHits == 0)
+	// Fallback for a remote client on a server WITHOUT the mod (registry arrays above are
+	// Transient so empty here, and there's no feed component). AFGWorldScannableDataGenerator
+	// is a cooked level actor present on clients too; it lists every level-placed pickup/pod
+	// with position + class, including ones not streamed in — so this covers far-away
+	// collectibles. It can't know what other players already collected, hence feed first.
+	int32 GeneratorHits = 0;
+	if (ScannableHits == 0 && !bHasServerFeed)
 	{
-		// Sweep streamed-in actors directly. On a client this is the only source of
-		// collectibles; nearby ones are replicated normally so their meshes exist here.
+		auto FromGenerator = [&](const FWorldScannableData& Data, bool bIsPod)
+		{
+			const double D = FVector::DistSquared(Data.ActorLocation, PlayerLoc);
+			if (D > MaxDistSq)
+			{
+				return;
+			}
+			AActor* Actor = Data.Actor.Get();
+			// Collected/looted state is only knowable when the actor is streamed in; when it
+			// isn't, show it (matches how the game's own object scanner treats them).
+			if (IsValid(Actor))
+			{
+				if (bIsPod)
+				{
+					const AFGDropPod* Pod = Cast<AFGDropPod>(Actor);
+					if (Pod && Pod->HasBeenLooted())
+					{
+						return;
+					}
+				}
+				else if (const AFGItemPickup* Pickup = Cast<AFGItemPickup>(Actor))
+				{
+					if (Pickup->IsPickedUp())
+					{
+						return;
+					}
+				}
+			}
+			EVTCCollectibleCategory Category;
+			if (!Tables.Resolve(Actor, Data.ActorClass.Get(), Category))
+			{
+				return;
+			}
+			if (!Cfg.GetFor(Category).Enabled)
+			{
+				return;
+			}
+			FVTCFedCollectible F;
+			F.Location = Data.ActorLocation;
+			F.Category = static_cast<uint8>(Category);
+			RegistryNearby.Add(F);
+			if (IsValid(Actor) && !Actor->IsActorBeingDestroyed())
+			{
+				Candidates.Add({ Actor, Category, D });
+			}
+		};
+		for (TActorIterator<AFGWorldScannableDataGenerator> It(World); It; ++It)
+		{
+			for (const FWorldScannableData& Data : It->mItemPickups) { ++GeneratorHits; FromGenerator(Data, /*bIsPod*/ false); }
+			for (const FWorldScannableData& Data : It->mDropPods)     { ++GeneratorHits; FromGenerator(Data, /*bIsPod*/ true); }
+		}
+	}
+
+	if (ScannableHits == 0 && GeneratorHits == 0)
+	{
+		// Last resort: sweep streamed-in actors directly.
 		for (TActorIterator<AFGItemPickup> It(World); It; ++It)
 		{
 			if (IsValid(*It) && !It->IsPickedUp())
@@ -379,6 +469,17 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 				Consider(*It, It->GetClass(), It->GetActorLocation());
 			}
 		}
+	}
+
+	// Log the active source, and again whenever it changes (e.g. the feed component arriving
+	// a few seconds after joining a modded server).
+	const int32 SourceSig = (ScannableHits > 0 ? 1 : 0) | (bHasServerFeed ? 2 : 0) | (GeneratorHits > 0 ? 4 : 0);
+	if (SourceSig != LastSourceSig)
+	{
+		LastSourceSig = SourceSig;
+		UE_LOG(LogViewThroughCollectibles, Display,
+			TEXT("collectible source: scannableHits=%d serverFeed=%d generatorHits=%d -> %d nearby in range"),
+			ScannableHits, bHasServerFeed ? 1 : 0, GeneratorHits, RegistryNearby.Num());
 	}
 
 	// --- Runtime player-dropped items (never in the scannable registry) -------------------
@@ -435,7 +536,8 @@ void UVTCOutlineSubsystem::RefreshOutlines()
 	}
 
 	// --- Distant collectibles (registry or server feed) we haven't streamed in ------------
-	RefreshRemoteMarkers(Cfg, PlayerLoc, Desired, RegistryNearby, /*bHaveRegistry*/ ScannableHits > 0);
+	RefreshRemoteMarkers(Cfg, PlayerLoc, Desired, RegistryNearby,
+		/*bHaveRegistry*/ ScannableHits > 0 || GeneratorHits > 0);
 
 	// --- Map / compass dots ---------------------------------------------------------------
 	RefreshMapDots(Cfg, Desired);
@@ -488,6 +590,16 @@ namespace
 		const uint64 Y = static_cast<uint64>(static_cast<uint32>(FMath::RoundToInt(Loc.Y / 100.0))) & 0xFFFFF;
 		const uint64 Z = static_cast<uint64>(static_cast<uint32>(FMath::RoundToInt(Loc.Z / 100.0))) & 0xFFFFF;
 		return (static_cast<uint64>(Category) & 0xF) | (X << 4) | (Y << 24) | (Z << 44);
+	}
+
+	// The category's UMETA(DisplayName) — used as the marker's map/compass label.
+	FText CategoryLabel(EVTCCollectibleCategory Category)
+	{
+		if (const UEnum* Enum = StaticEnum<EVTCCollectibleCategory>())
+		{
+			return Enum->GetDisplayNameTextByValue(static_cast<int64>(Category));
+		}
+		return FText::GetEmpty();
 	}
 }
 
@@ -588,6 +700,13 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		WantedList.SetNum(MaxMarkers);
 	}
 
+	// Spawning is real Actor/Component creation cost — capping how many NEW markers a single
+	// refresh may create keeps a fresh join (or a big jump in Max Distance, which can put
+	// hundreds at once into WantedList) from creating them all in one frame and hitching. The
+	// rest just get picked up on the following refreshes until the full budget is filled.
+	constexpr int32 MaxNewMarkersPerRefresh = 20;
+	int32 NewlySpawned = 0;
+
 	TSet<uint64> Wanted;
 	for (const FWantedMarker& W : WantedList)
 	{
@@ -596,6 +715,10 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		const EVTCCollectibleCategory Category = W.Category;
 		Wanted.Add(Key);
 		if (RemoteMarkers.Contains(Key))
+		{
+			continue;
+		}
+		if (NewlySpawned >= MaxNewMarkersPerRefresh)
 		{
 			continue;
 		}
@@ -624,6 +747,7 @@ void UVTCOutlineSubsystem::RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, con
 		MeshComp->RegisterComponent();
 
 		RemoteMarkers.Add(Key, FTrackedMarker(Marker, Loc, Category));
+		++NewlySpawned;
 	}
 
 	// Drop markers no longer wanted (collected, out of range, or now streamed in and outlined).
@@ -655,11 +779,8 @@ void UVTCOutlineSubsystem::ClearRemoteMarkers()
 
 // ---------------------------------------------------------------------------------------------
 
-// Properly imported per the Icon Library docs' guidance for in-game icon textures (Mip Gen
-// Settings = FromTextureGroup, Texture Group = UI Streamable, Compression = Default DX11).
-// A runtime CreateTransient texture (no texture group, no streaming setup) rendered as an
-// untinted placeholder square on both map and compass — testing whether a properly
-// imported, streaming-compatible texture is what the map/compass image widget actually needs.
+// Icon texture for the map dot. Imported per the Icon Library docs' guidance for in-game
+// icon textures (Mip Gen Settings = FromTextureGroup, Texture Group = UI, Compression = UserInterface2D).
 static const TCHAR* DotTexturePath = TEXT("/ViewThroughCollectibles/Textures/T_VTCDot.T_VTCDot");
 
 UTexture2D* UVTCOutlineSubsystem::EnsureDotTexture()
@@ -670,11 +791,11 @@ UTexture2D* UVTCOutlineSubsystem::EnsureDotTexture()
 	}
 
 	DotTexture = LoadObject<UTexture2D>(nullptr, DotTexturePath);
-	if (!DotTexture)
+	if (!bDotTextureLoadLogged)
 	{
-		UE_LOG(LogViewThroughCollectibles, Warning,
-			TEXT("Map dot texture %s not found - import T_VTCDot.png into that path. Map/compass dots disabled until then."),
-			DotTexturePath);
+		bDotTextureLoadLogged = true;
+		UE_LOG(LogViewThroughCollectibles, Display, TEXT("EnsureDotTexture: LoadObject(%s) -> %s"),
+			DotTexturePath, DotTexture ? TEXT("OK") : TEXT("MISSING (import T_VTCDot.png there)"));
 	}
 	return DotTexture;
 }
@@ -696,6 +817,18 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 		return;
 	}
 
+	AFGActorRepresentationManager* Mgr = AFGActorRepresentationManager::Get(World);
+	if (!Mgr)
+	{
+		// Manager isn't replicated to the client yet (first ~20 s after spawn). Try next tick.
+		return;
+	}
+
+	// Same reasoning as RefreshRemoteMarkers's spawn cap: creating a representation is real
+	// work (manager bookkeeping, an immediate UpdateRepresentation call), so a fresh join or a
+	// big jump in Max Distance mustn't create hundreds of them in one frame.
+	constexpr int32 MaxNewMapDotsPerRefresh = 20;
+	int32 Created = 0;
 	TSet<uint64> Wanted;
 	auto Want = [&](const FVector& Loc, EVTCCollectibleCategory Category)
 	{
@@ -705,30 +838,41 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 			return;
 		}
 		Wanted.Add(Key);
-		if (MapDots.Contains(Key))
+		if (MapDots.Contains(Key) || Created >= MaxNewMapDotsPerRefresh)
 		{
 			return;
 		}
 		FLinearColor Colour = Cfg.GetFor(Category).GetLinearColor();
 		Colour.A = 1.f;
 
-		FActorSpawnParameters SpawnParams;
-		SpawnParams.ObjectFlags |= RF_Transient;
-		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-		AVTCMapMarkerActor* MarkerActor = World->SpawnActor<AVTCMapMarkerActor>(
-			AVTCMapMarkerActor::StaticClass(), FTransform(Loc), SpawnParams);
-		if (!MarkerActor)
+		// Client-local map + compass representation. The actor-interface path
+		// (CreateAndAddNewRepresentation) can't work here: Satisfactory only copies interface
+		// visuals into the representation on the server (UpdateActorRepresentationFromInterface
+		// is server-only), so a client marker keeps engine defaults. This convenience call sets
+		// texture/colour/type directly and builds the compass icon from the texture.
+		UFGActorRepresentation* Rep = Mgr->CreateAndAddNewRepresentationNoActor(
+			Loc, Icon, Colour, /*lifeSpan*/ 0.f,
+			/*shouldShowInCompass*/ true, /*shouldShowOnMap*/ true,
+			ERepresentationType::RT_MapMarker, UVTCMapRepresentation::StaticClass());
+		if (Rep)
 		{
-			return;
-		}
-		MarkerActor->Init(Icon, Colour);
-		if (MarkerActor->AddAsRepresentation())
-		{
-			MapDots.Add(Key, MarkerActor);
-		}
-		else
-		{
-			MarkerActor->Destroy();
+			if (UVTCMapRepresentation* MapRep = Cast<UVTCMapRepresentation>(Rep))
+			{
+				MapRep->SetMarkerText(CategoryLabel(Category));
+				Mgr->UpdateRepresentation(MapRep);   // re-cache the label set after creation
+			}
+			MapDots.Add(Key, Rep);
+			++Created;
+			if (!bMapDotDiagLogged)
+			{
+				bMapDotDiagLogged = true;
+				UMaterialInterface* CompassMat = Rep->GetRepresentationCompassMaterial();
+				UE_LOG(LogViewThroughCollectibles, Display,
+					TEXT("map dot rep created: type=RT_MapMarker label='%s' compassMaterial=%s texture=%s colour=%s"),
+					*CategoryLabel(Category).ToString(),
+					CompassMat ? *CompassMat->GetName() : TEXT("NULL"),
+					Icon ? *Icon->GetName() : TEXT("null"), *Colour.ToString());
+			}
 		}
 	};
 
@@ -746,25 +890,32 @@ void UVTCOutlineSubsystem::RefreshMapDots(const FVTCConfigStruct& Cfg,
 
 	for (auto It = MapDots.CreateIterator(); It; ++It)
 	{
-		AVTCMapMarkerActor* MarkerActor = It.Value().Get();
-		if (!Wanted.Contains(It.Key()) || !IsValid(MarkerActor))
+		UFGActorRepresentation* Rep = It.Value().Get();
+		if (!Wanted.Contains(It.Key()) || !Rep)
 		{
-			if (IsValid(MarkerActor))
+			if (Rep)
 			{
-				MarkerActor->Destroy();   // EndPlay() removes the representation
+				Mgr->RemoveRepresentation(Rep);
 			}
 			It.RemoveCurrent();
 		}
 	}
+
+	UE_LOG(LogViewThroughCollectibles, Display,
+		TEXT("RefreshMapDots: wanted %d keys, %d live map reps (+%d created this pass) from %d outlines + %d remote markers"),
+		Wanted.Num(), MapDots.Num(), Created, LoadedOutlines.Num(), RemoteMarkers.Num());
 }
 
 void UVTCOutlineSubsystem::ClearMapDots()
 {
-	for (const TPair<uint64, TWeakObjectPtr<AVTCMapMarkerActor>>& Pair : MapDots)
+	if (AFGActorRepresentationManager* Mgr = AFGActorRepresentationManager::Get(GetWorld()))
 	{
-		if (AVTCMapMarkerActor* MarkerActor = Pair.Value.Get())
+		for (const TPair<uint64, TWeakObjectPtr<UFGActorRepresentation>>& Pair : MapDots)
 		{
-			MarkerActor->Destroy();   // EndPlay() removes the representation
+			if (UFGActorRepresentation* Rep = Pair.Value.Get())
+			{
+				Mgr->RemoveRepresentation(Rep);
+			}
 		}
 	}
 	MapDots.Reset();

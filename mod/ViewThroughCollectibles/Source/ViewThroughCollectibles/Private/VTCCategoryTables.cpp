@@ -30,8 +30,10 @@ void FVTCCategoryTables::Load()
 	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/Desc_Crystal.Desc_Crystal_C"), EVTCCollectibleCategory::PowerSlugMk1);
 	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/Desc_Crystal_mk2.Desc_Crystal_mk2_C"), EVTCCollectibleCategory::PowerSlugMk2);
 	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/Desc_Crystal_mk3.Desc_Crystal_mk3_C"), EVTCCollectibleCategory::PowerSlugMk3);
-	Desc(TEXT("/Game/FactoryGame/Prototype/WAT/Desc_WAT1.Desc_WAT1_C"), EVTCCollectibleCategory::MercerSphere);
-	Desc(TEXT("/Game/FactoryGame/Prototype/WAT/Desc_WAT2.Desc_WAT2_C"), EVTCCollectibleCategory::Somersloop);
+	// WAT1 is the Somersloop, WAT2 is the Mercer Sphere (verified in-game — the folder numbering
+	// is the reverse of what you'd expect).
+	Desc(TEXT("/Game/FactoryGame/Prototype/WAT/Desc_WAT1.Desc_WAT1_C"), EVTCCollectibleCategory::Somersloop);
+	Desc(TEXT("/Game/FactoryGame/Prototype/WAT/Desc_WAT2.Desc_WAT2_C"), EVTCCollectibleCategory::MercerSphere);
 	// Folder names don't match in-game names: Desc_Berry = Beryl Nut, Desc_Nut = Paleberry,
 	// Desc_Shroom = Bacon Agaric. TODO verify in-game before shipping.
 	Desc(TEXT("/Game/FactoryGame/Resource/Environment/Berry/Desc_Berry.Desc_Berry_C"), EVTCCollectibleCategory::BerylNut);
@@ -41,8 +43,8 @@ void FVTCCategoryTables::Load()
 	Cls(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal.BP_Crystal_C"), EVTCCollectibleCategory::PowerSlugMk1);
 	Cls(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal_mk2.BP_Crystal_mk2_C"), EVTCCollectibleCategory::PowerSlugMk2);
 	Cls(TEXT("/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal_mk3.BP_Crystal_mk3_C"), EVTCCollectibleCategory::PowerSlugMk3);
-	Cls(TEXT("/Game/FactoryGame/Prototype/WAT/BP_WAT1.BP_WAT1_C"), EVTCCollectibleCategory::MercerSphere);
-	Cls(TEXT("/Game/FactoryGame/Prototype/WAT/BP_WAT2.BP_WAT2_C"), EVTCCollectibleCategory::Somersloop);
+	Cls(TEXT("/Game/FactoryGame/Prototype/WAT/BP_WAT1.BP_WAT1_C"), EVTCCollectibleCategory::Somersloop);
+	Cls(TEXT("/Game/FactoryGame/Prototype/WAT/BP_WAT2.BP_WAT2_C"), EVTCCollectibleCategory::MercerSphere);
 	// Flora pickup BP classes — needed for the server marker feed, where only the class is
 	// known (no streamed actor, no descriptor). TODO verify these paths in-game.
 	Cls(TEXT("/Game/FactoryGame/Resource/Environment/Berry/BP_Berry.BP_Berry_C"), EVTCCollectibleCategory::BerylNut);

@@ -14,7 +14,7 @@ class UMaterialInstanceDynamic;
 class UMaterialParameterCollection;
 class UStaticMesh;
 class UTexture2D;
-class AVTCMapMarkerActor;
+class UFGActorRepresentation;
 
 namespace VTC
 {
@@ -114,14 +114,22 @@ private:
 	};
 	TMap<uint64, FTrackedMarker> RemoteMarkers;
 
-	/** Quantised world position -> the transient marker actor registered as its map/compass dot. */
-	TMap<uint64, TWeakObjectPtr<AVTCMapMarkerActor>> MapDots;
+	/** Quantised world position -> the local map representation registered for that dot. */
+	TMap<uint64, TWeakObjectPtr<UFGActorRepresentation>> MapDots;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMesh> MarkerMesh;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> DotTexture;
+	bool bDotTextureLoadLogged = false;
+	bool bMapDotDiagLogged = false;
+	int32 LastSourceSig = -1;
+
+	/** Last Max Distance/Max Simultaneous reported to the server's feed component, so we only
+	 *  re-send Server_ReportRangePreference when they actually change. */
+	float LastReportedMaxDistanceCm = -1.f;
+	int32 LastReportedMaxEntries = -1;
 
 	FVTCCategoryTables Tables;
 

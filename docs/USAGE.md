@@ -41,15 +41,19 @@ All settings apply live — no restart. In multiplayer each player has their own
 - Collectibles you can see get an outline; ones a little too far to have loaded in get a
   small see-through marker sphere instead, so nearby collectibles show before they render.
 - If the **server also has the mod**, that marker fill-in works out to the full distance on
-  a server too. Without it on the server, you still get outlines for everything loaded.
+  a server too, and it filters out collectibles that have already been picked up. Without it
+  on the server, distant collectibles are read from the map's own scan data: they still show,
+  but ones collected earlier by other players may keep showing until you get close enough for
+  the game to tell you they're gone.
 
 ## Known limitations
 
 - The outline edge is screen-space and not temporally smoothed, so fast camera motion shows
   some shimmer on the edge. The mod already disables the Custom Depth pass's TAA jitter to
   cut most of it.
-- On a server, distant collectibles only appear once they're within replication range — a
-  bit shorter than in singleplayer at very large **Max Distance** values.
+- On a server without the mod, "already collected" state for distant, not-yet-loaded
+  collectibles isn't available to the client, so a few collected ones can linger on the map
+  until you approach them. Collectibles you've loaded in are always filtered correctly.
 - World Power Slugs that render as instanced meshes may not take the outline; pick one up
   and it will show as a dropped item.
 
