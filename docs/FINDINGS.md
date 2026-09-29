@@ -1,103 +1,71 @@
-# Findings from the real FactoryGame headers
+# Architecture and API notes
 
-Verified against `F:\dev\satisfactory_mods\SatisfactoryModLoader` — SML **3.12.0**, engine
-**5.6.1-CSS**, game CL **502094**. `.cpp` bodies in that checkout are stubs; only header
-signatures are authoritative.
+The local integration targets SML 3.12.0, FactoryGame CL 502094 and Unreal 5.6.1-CSS.
+FactoryGame implementation files in the modding checkout are stubs; header signatures
+and real game tests must be distinguished.
 
-## Outline system (`FGOutlineComponent.h`, `FGBlueprintFunctionLibrary.h`)
+## Discovery
 
-- `static UFGOutlineComponent* UFGOutlineComponent::Get(const UWorld* world)` — local
-  player's outline component.
-- `AFGCharacterPlayer::GetOutline()` → `UFGOutlineComponent*` (FORCEINLINE) — fallback.
-- `void ShowOutline(AActor* actorToOutline, const EOutlineColor color, bool
-  createDefaultProxies = true, bool onlyHighlightProxies = false)`
-- `void ShowOutlineForStaticMeshComponent(AActor*, UStaticMeshComponent*, const EOutlineColor)`
-- `void HideOutline(AActor* actor)`
-- `EOutlineColor GetOutlineStateColorForActor(const AActor* actor)` — can be used instead of
-  tracking our own current-colour map.
+`VTCDiscovery.cpp` reads `AFGScannableSubsystem` on authority only. Its registry stores
+`FWorldScannableData`: actor soft reference, GUID, actor class and position.
+`DoesPickupExist` and `HasDropPodBeenLooted` provide authoritative collected state.
+An empty authoritative result stays empty; it never falls back to raw cooked data.
 
-### ⚠ `EOutlineColor` is NOT a colour picker
+The position arrays are transient. Transient does **not** imply empty on remote clients:
+cooked generator data can populate positions there, while save-backed destroyed/looted
+sets remain unavailable. Consequently remote clients never use that registry as proof
+that a collectible still exists.
 
-```
-OC_NONE, OC_INPUTOUTPUT, OC_HOLOGRAMLINE, OC_SOFTCLEARANCE, OC_USABLE, OC_HOLOGRAM,
-OC_INVALIDHOLOGRAM, OC_RED, OC_DISMANTLE, OC_SOFTCLEARANCEOVERLAP
-```
+Loaded `AFGItemPickup` and `AFGDropPod` actors resolve current positions and remove
+collected entries by GUID. With a server feed, they may only enrich level-placed IDs
+present in that authoritative selection, including while waiting for the first response.
+Local collection observations persist across streaming and older feed snapshots; a
+respawnable pickup is eligible again after it is loaded with replenished items. The iterator already includes
+`AFGItemPickup_Spawnable`, so dropped items are not swept twice.
+`GetItemPickupGuid` and `GetDropPodGuid` provide stable level-placed identities.
+Runtime identities are local and retained only for the actor's lifetime.
 
-These are semantic states, each bound to a specific look in the game's outline material.
-Roughly 3–4 are visually distinct and sensible for "spot a collectible":
-`OC_RED` (red), `OC_USABLE` (warm/yellow), `OC_HOLOGRAM` (teal/green), `OC_DISMANTLE`
-(orange-red). There is **no arbitrary `FLinearColor` outline path** anywhere in the headers.
+`VTCSelection.h` applies category/distance filters, deterministic distance ordering
+(with GUID tie-breaks), and one shared count limit.
 
-The outlines *do* render through terrain/buildings (same custom-depth pass the resource
-scanner uses), so the "see through" requirement is fine — only free colour choice is not.
+## Optional server feed
 
-`r.CustomDepth=3` in `Config/DefaultEngine.ini` → the custom depth **+ stencil** pass is on
-globally, so a custom post-process outline material (for true per-type RGB) is viable
-without any base-game project change.
+`USMLRemoteCallObject::IsClientModInstalled` and the client's version gate component
+creation. The listen host needs no feed, and clients without the mod receive no custom
+replicated class.
 
-## Collectible registry (`FGScannableSubsystem.h`, `FGWorldScannableData.h`)
+`UVTCCollectibleFeedComponent` accepts validated client preferences and a request
+revision. Work happens on the subsystem timer, not inside the RPC. The server waits
+for a report instead of using host settings. Responses contain GUID, quantised position
+and category. Only one page of at most 128 entries is in flight per owner; the client
+acknowledges each page and publishes only a complete response. This bounds network
+message size without truncating the client's configured selection.
 
-`AFGScannableSubsystem::Get(worldContext)` — the system behind the Object Scanner.
+The server filters categories before its count limit. The client merges that nearest-N
+level-placed set with loaded actors and dropped items and applies the same selection
+policy. Zero settings are intentional disable requests.
 
-- `const TArray<FWorldScannableData>& GetAvailableItemPickups() const`
-- `const TArray<FWorldScannableData>& GetAvailableDropPods() const`
-- `bool DoesPickupExist(const FGuid& PickupGuid) const` — false once collected/destroyed
-- `bool HasDropPodBeenLooted(const FGuid& dropPodGuid) const`
+## Presentation
 
-`FWorldScannableData = { TSoftObjectPtr<AActor> Actor; FGuid ActorGuid;
-TSubclassOf<AActor> ActorClass; FVector ActorLocation; }`
+`UVTCOutlineSubsystem` owns local meshes, transient markers, a post-process volume and
+map representations. GUIDs link their lifetimes. Marker roots are created before setting
+world position. Markers render in Custom Depth only, without main/depth-pass rendering,
+shadows, collision or replication.
 
-This is a **cooked-in list of every level-placed collectible + its class + world position**,
-with collected-state filtering — far better than a `TActorIterator` sweep. Use it for
-positions/distance-cull, then outline the subset whose `Actor.Get()` is currently streamed
-in. Does **not** include runtime-spawned player-dropped items.
+Mesh Custom Depth ownership is tracked per component. Original stencil values and write
+masks are restored only if the component still has the state written by this mod.
+Pre-existing Custom Depth is not taken over.
 
-**Server-authoritative.** `AFGScannableSubsystem : AFGSubsystem`, and `mAvailableItemPickups`
-/ `mAvailableDropPods` are `Transient` (not `Replicated`) — populated by
-`AFGWorldScannableDataGenerator` where the cooked data loads. On a **remote client** both
-arrays come back empty, so a client must fall back to `TActorIterator<AFGItemPickup>` +
-`TActorIterator<AFGDropPod>` (both are `AFGStaticReplicatedActor`, so nearby ones replicate
-in normally). The subsystem does this whenever the registry yields zero hits.
+`UVTCMapRepresentation` updates local location, colour and text before asking
+`AFGActorRepresentationManager` to refresh the existing representation. Labels use
+localisable text literals rather than editor-only enum display metadata.
 
-The vanilla **Object Scanner** works around this with `Server_SetScannableDescriptor` +
-a single `ReplicatedUsing` `FScannableActorDetails mClosestObject` on the equipment — the
-server sends back only the closest match for the selected descriptor, no full list. This
-mod's optional `UVTCServerFeedSubsystem` does the equivalent for all categories: on the
-server it reads the registry and pushes a distance-limited `{pos, category}` array to each
-player's `UVTCCollectibleFeedComponent` (a runtime `UActorComponent` on the PlayerController,
-`SetIsReplicated(true)` → owner-only). No RPC in either direction; state replication only.
+## Verification still requiring the game
 
-## Pickups (`FGItemPickup.h`, `FGItemPickup_Spawnable.h`)
+- World-partition loading and collection while moving between areas.
+- Full host/client and dedicated-server replication, including clients without the mod.
+- Flora blueprint/descriptor mappings and their actual rendered mesh types.
+- Shader output under TSR/TAA and different screen percentages.
+- Interaction with the game's scanner highlights and other Custom Depth users.
 
-- `AFGItemPickup` (abstract) : `AFGStaticReplicatedActor` — base of slugs, spheres, sloops,
-  flora, and (via `_Spawnable`) dropped items.
-  - `TSubclassOf<UFGItemDescriptor> GetPickupItemClass() const` — **use this to categorise**
-    (flora & hard-drive have no dedicated pickup BP, only a descriptor).
-  - `bool IsPickedUp() const`, `const FGuid& GetItemPickupGuid() const`,
-    `FInventoryStack GetPickupItems() const`.
-- `AFGItemPickup_Spawnable : AFGItemPickup` (NotPlaceable) — single player-dropped item;
-  runtime-spawned, not in scannable data → needs an iterator or spawn hook.
-- Multi-item drops (death / dismantle) are `AFGCrate : AFGInteractActor` — a **separate
-  hierarchy**, not an `AFGItemPickup`. Decide whether "dropped items" covers crates.
-
-## Drop pods (`FGDropPod.h`)
-
-- `AFGDropPod : AFGCrashSiteBaseActor` (not a pickup) — own iterator / own scannable list.
-- `FORCEINLINE bool HasBeenOpened() const`, `bool HasBeenLooted() const` — skip looted pods.
-
-## Verified asset paths
-
-| Category | Pickup actor BP | Item descriptor |
-|---|---|---|
-| Power slug blue | `/Game/FactoryGame/Resource/Environment/Crystal/BP_Crystal.BP_Crystal_C` | `Desc_Crystal_C` |
-| Power slug yellow | `.../Crystal/BP_Crystal_mk2.BP_Crystal_mk2_C` | `Desc_Crystal_mk2_C` |
-| Power slug purple | `.../Crystal/BP_Crystal_mk3.BP_Crystal_mk3_C` | `Desc_Crystal_mk3_C` |
-| Somersloop | `/Game/FactoryGame/Prototype/WAT/BP_WAT1.BP_WAT1_C` | `Desc_WAT1_C` |
-| Mercer Sphere | `/Game/FactoryGame/Prototype/WAT/BP_WAT2.BP_WAT2_C` | `Desc_WAT2_C` |
-| Beryl Nut | *(no dedicated BP)* | `/Game/FactoryGame/Resource/Environment/Berry/Desc_Berry.Desc_Berry_C` |
-| Paleberry | *(no dedicated BP)* | `/Game/FactoryGame/Resource/Environment/Nut/Desc_Nut.Desc_Nut_C` |
-| Bacon Agaric | *(no dedicated BP)* | `/Game/FactoryGame/Resource/Environment/DesertShroom/Desc_Shroom.Desc_Shroom_C` |
-| Hard drive pod | `AFGDropPod` subclass(es) | `/Game/FactoryGame/Resource/Environment/CrashSites/Desc_HardDrive.Desc_HardDrive_C` |
-
-(Berry/Nut/Shroom folder names don't match their in-game names — `Desc_Berry` = Beryl Nut,
-`Desc_Nut` = Paleberry, `Desc_Shroom` = Bacon Agaric. Confirm in-game before shipping.)
+See [TESTING.md](TESTING.md) for the regression and manual test matrix.

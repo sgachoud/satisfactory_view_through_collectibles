@@ -12,4 +12,10 @@ public:
 	/** IModuleInterface implementation */
 	virtual void StartupModule() override;
 	virtual void ShutdownModule() override;
+
+private:
+	FDelegateHandle SetMarkerHighlightHook;
+	FDelegateHandle QueryRepresentationHighlightHook;
+	FDelegateHandle UpdateLocalMarkerHook;
+	FDelegateHandle RemoveLocalMarkerHook;
 };

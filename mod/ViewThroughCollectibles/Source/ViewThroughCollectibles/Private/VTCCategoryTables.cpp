@@ -65,7 +65,7 @@ void FVTCCategoryTables::Load()
 			if (FParse::Value(*Entry, TEXT("Path="), PathStr) && FParse::Value(*Entry, TEXT("Category="), CategoryStr))
 			{
 				const int64 Val = StaticEnum<EVTCCollectibleCategory>()->GetValueByNameString(CategoryStr);
-				if (Val != INDEX_NONE)
+				if (Val >= 0 && Val < static_cast<int64>(EVTCCollectibleCategory::MAX))
 				{
 					Table.Add(FSoftClassPath(PathStr), static_cast<EVTCCollectibleCategory>(Val));
 				}

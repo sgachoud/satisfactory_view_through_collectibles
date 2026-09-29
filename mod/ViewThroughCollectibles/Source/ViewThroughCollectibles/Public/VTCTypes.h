@@ -66,9 +66,80 @@ struct FVTCFedCollectible
 	GENERATED_BODY()
 
 	UPROPERTY()
+	FGuid Id;
+
+	UPROPERTY()
 	FVector_NetQuantize100 Location = FVector::ZeroVector;
 
 	/** EVTCCollectibleCategory as a byte, for a compact wire size. */
 	UPROPERTY()
 	uint8 Category = 0;
+
+	bool operator==(const FVTCFedCollectible& Other) const
+	{
+		return Id == Other.Id && Location == Other.Location && Category == Other.Category;
+	}
+};
+
+/** Effective client settings relevant to discovery. Appearance stays on the client. */
+USTRUCT()
+struct FVTCFeedPreferences
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	double MaxDistanceCm = 0.0;
+	UPROPERTY()
+	int32 MaxEntries = 0;
+	UPROPERTY()
+	int32 EnabledCategories = 0;
+	UPROPERTY()
+	float RefreshSeconds = 0.4f;
+
+	bool IsValid() const
+	{
+		constexpr int32 ValidMask = (1 << static_cast<uint8>(EVTCCollectibleCategory::MAX)) - 1;
+		return FMath::IsFinite(MaxDistanceCm) && MaxDistanceCm >= 0.0 &&
+			FMath::IsFinite(MaxDistanceCm * MaxDistanceCm) && MaxEntries >= 0 &&
+			FMath::IsFinite(RefreshSeconds) && RefreshSeconds >= 0.1f &&
+			(EnabledCategories & ~ValidMask) == 0;
+	}
+	bool Includes(uint8 Category) const
+	{
+		return Category < static_cast<uint8>(EVTCCollectibleCategory::MAX) &&
+			(EnabledCategories & (1 << Category)) != 0;
+	}
+	bool operator==(const FVTCFeedPreferences& Other) const
+	{
+		return MaxDistanceCm == Other.MaxDistanceCm && MaxEntries == Other.MaxEntries &&
+			EnabledCategories == Other.EnabledCategories && RefreshSeconds == Other.RefreshSeconds;
+	}
+};
+
+/** A response is tagged with its request so old settings never win a race. */
+USTRUCT()
+struct FVTCFeedSnapshot
+{
+	GENERATED_BODY()
+	UPROPERTY()
+	uint32 Revision = 0;
+	UPROPERTY()
+	TArray<FVTCFedCollectible> Entries;
+};
+
+/** At most 128 entries are replicated at once; the owner acknowledges each page. */
+USTRUCT()
+struct FVTCFeedPage
+{
+	GENERATED_BODY()
+	UPROPERTY()
+	uint32 Revision = 0;
+	UPROPERTY()
+	uint32 Serial = 0;
+	UPROPERTY()
+	int32 Index = 0;
+	UPROPERTY()
+	bool bLast = false;
+	UPROPERTY()
+	TArray<FVTCFedCollectible> Entries;
 };

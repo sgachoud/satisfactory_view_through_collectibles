@@ -1,149 +1,90 @@
 # View Through Collectibles
 
-A Satisfactory (SML) mod that draws a configurable coloured outline on world collectibles
-and dropped items, visible **through** grass, buildings and terrain, within a distance you
-choose.
+A Satisfactory/SML mod that highlights nearby hard-drive pods, power slugs, Mercer
+Spheres, Somersloops, collectible flora and dropped items through terrain and buildings.
+Each category has its own toggle and colour. Optional dots show the same selection on
+the map. A dot appears on the compass only while you highlight its map marker.
 
-Covers: hard-drive drop pods, all three power-slug tiers, Mercer Spheres, Somersloops,
-collectible flora (Beryl Nut, Paleberry, Bacon Agaric), and items dropped on the ground.
-Each type is independently toggleable and has its own RGB outline colour.
+## Supported modes
 
-## How it works
+| Session | Behaviour |
+| --- | --- |
+| Solo | The authoritative scannable registry supplies collectible positions and collected state, including unloaded objects. |
+| Listen-server host | Same discovery and presentation as solo, using the host's own config. |
+| Remote client, server without this mod | Loaded collectibles and dropped items are highlighted. Distant registry markers are unavailable because collected state cannot be verified. |
+| Remote client, server with this mod | The server supplies authoritative distant collectibles using that client's distance, count, enabled categories and refresh interval. |
+| Server with clients without this mod | SML's installed-mod list is checked before creating the owner-only feed component. Unsupported clients receive no mod component. |
+| Dedicated server | Runs the optional feed service only; creates no outline volumes or marker actors. |
 
-- A client-side `UWorldSubsystem` asks the game's `AFGScannableSubsystem` for every
-  level-placed collectible (class + world position + collected/looted state). That registry
-  is server-authoritative and unreplicated, so on a remote client it comes back empty and
-  the subsystem falls back to sweeping streamed-in `AFGItemPickup` / `AFGDropPod` actors.
-  Runtime player-dropped items are always found by a direct `AFGItemPickup_Spawnable` sweep.
-- For the nearest N within the configured distance, it writes a per-category **Custom Depth
-  stencil value** (201–210) onto the collectible's mesh components.
-- Collectibles within the distance that *aren't* streamed in get a small see-through marker
-  sphere instead — same stencil, same colours — so nearby collectibles show even before
-  they render. Positions come from the scannable registry in singleplayer / as the
-  listen-server host; on a remote client they're replicated from the server **if the server
-  also has the mod** (a server-side subsystem feeds each client an owner-only list).
-  Without the mod on the server the markers just don't appear and the outlines still work
-  for whatever is loaded.
-- A packaged **post-process material** (`M_VTCOutline`) reads those stencil values and draws
-  a coloured edge (and a faint fill where the collectible is hidden behind geometry).
-  Colours, thickness and fill opacity come from a Material Parameter Collection
-  (`MPC_VTCColors`) that the subsystem updates live from the mod config.
-- Optionally (**Show on Map**), each active outline/marker also gets a category-coloured
-  dot on the map and compass via `AFGActorRepresentationManager` (client-local, no actor).
+Install matching mod versions on both ends for the full multiplayer feature set.
+`RequiredOnRemote: false` makes server installation optional; it does not prohibit a
+server build.
 
-Custom Depth + stencil is already enabled in the base game (`r.CustomDepth=3`), so no
-project-level change is required. While the subsystem is active it also forces
-`r.CustomDepthTemporalAAJitter 0` (restored on unload) so the outline doesn't inherit the
-TSR/TAA sub-pixel jitter and shimmer.
+## Selection and presentation
 
-## Multiplayer
+Discovery uses persistent collectible GUIDs. Runtime dropped items without a usable
+persistent identity receive a local ID for their lifetime. Loaded actors replace distant
+records with the same ID; nearby but distinct collectibles are never merged.
+On a modded server, a loaded level-placed actor cannot reintroduce an ID absent from
+the server selection. Observed collected IDs also suppress stale feed entries after
+streaming, so both map dots and world highlights use the same collected-state filter.
 
-Safe — the effect is client-side and cosmetic:
+Enabled categories and distance are filtered **before** choosing the nearest N.
+**Max Simultaneous Outlines is one shared budget** across loaded outlines and distant
+markers. Zero distance or zero count disables the selection.
 
-- The mod is **client-only** (`"RequiredOnRemote": false` in the `.uplugin`): a server
-  doesn't need it, and you can join servers that don't have it. Players without the mod are
-  unaffected.
-- The client outline subsystem never runs on a dedicated server (`ShouldCreateSubsystem`
-  returns false). The only actors it spawns are transient, client-local: one
-  `APostProcessVolume` and the marker spheres — never replicated, never saved
-  (`RF_Transient`, no `IFGSaveInterface`).
-- **Optional server half**: if the server has the mod, `UVTCServerFeedSubsystem` runs there
-  and replicates a distance-limited list of `{position, category}` to each player's own
-  `UVTCCollectibleFeedComponent` (owner-only). It reads the existing scannable registry,
-  spawns nothing, never touches the save. Purely additive — absent, clients just fall back.
-- Config is per client. Two players in one session can run completely different settings.
+A post-process material reads category stencils 201–210. Loaded meshes get an outline;
+unloaded objects, or actors without an available mesh, get a small sphere at the
+collectible's position. Marker and map-dot creation is spread across refreshes, at most
+20 of each per refresh. Map dots retain their identity and update colour/location live.
+
+The mod preserves mesh stencil settings and restores them when it releases a mesh.
+Meshes already using Custom Depth are left to their existing owner; a marker is used
+when no mesh can be claimed. If another system takes over a claimed mesh, the mod
+relinquishes it without restoring stale state. World teardown and loss of the local
+pawn clear all local indicators.
+
+The shader uses the game's existing Custom Depth/stencil pass. While presentation is
+active, the mod requests `r.CustomDepthTemporalAAJitter=0`; overlapping worlds share
+the override, and a later user console override is preserved.
+
+## Multiplayer requests
+
+The server waits for the client's first settings report. It never substitutes its own
+config, even when the client requests zero distance or count. Invalid/non-finite requests
+are ignored. Valid requests have no hidden distance/count ceiling or minimum of 400.
+Large selections therefore intentionally cost more processing and bandwidth.
+
+Queries are scheduled on a 0.1-second server timer and refreshed at each client's requested
+interval (minimum 0.1 seconds), plus scheduling/network delay. The registry is gathered
+once for all clients due on that tick. Replies carry a request revision so a response to
+old settings is not reused after a config change. Feed entries have a stable ID order
+to avoid replication changes caused only by exchanging distance ranks. Responses are
+sent in acknowledged pages of 128 entries; only complete snapshots are exposed. A slow
+connection finishes its current response before another scan, so large selections may
+refresh more slowly than the configured interval.
+
+Colours, thickness, fill and map visibility are applied locally and do not need server
+configuration. The feed covers level-placed collectibles; runtime dropped items are
+discovered from loaded actors on the client.
 
 ## Configuration
 
-In-game via the mod's settings menu (Mod Manager → this mod → Config, or the pause-menu mod
-options):
+Default distance: 120 m. Default refresh: 0.4 s. Default shared limit: 200.
+Flora and dropped items are disabled by default. Colours accept hex RGB/RGBA, with an
+optional `#`; malformed strings fall back to white. See [usage](docs/USAGE.md).
 
-| Setting | Meaning |
-|---|---|
-| **Max Distance (m)** | Collectibles farther than this from you are not outlined or markered. |
-| **Refresh Interval (s)** | How often the in-range set is recomputed. |
-| **Max Simultaneous Outlines** | Safety cap; nearest collectibles win. |
-| **Outline Thickness (px)** | Edge width in screen pixels. |
-| **Occluded Fill Opacity** | Tint strength over the parts hidden behind geometry. |
-| **Show on Map** | Also put a category-coloured dot on the map and compass for everything currently outlined or markered. |
-| **Per type**: Enabled + Color | Show/hide each collectible family and pick its RGB colour. |
+## Development
 
-## Layout
+- [Build and package](docs/SETUP.md)
+- [Architecture and API notes](docs/FINDINGS.md)
+- [Content asset specification](docs/CONTENT-ASSETS.md)
+- [Category overrides](docs/collectible-classes.md)
+- [Automated tests and multiplayer validation](docs/TESTING.md)
 
-```
-mod/ViewThroughCollectibles/        the complete SML plugin (junctioned into the SML checkout)
-  ViewThroughCollectibles.uplugin    "RequiredOnRemote": false — client-only, no server build
-  Source/.../Public/VTCTypes.h        collectible categories (= stencil offsets) + per-type settings
-  Source/.../Public/VTCConfig.h       SML config struct + live-config accessor
-  Source/.../Public/VTCCategoryTables.h        descriptor/class -> category, shared by both subsystems
-  Source/.../Private/VTCOutlineSubsystem.cpp   client: outlines + distant-collectible markers
-  Source/.../Private/VTCServerFeedSubsystem.cpp   server (optional): feeds nearby collectibles to clients
-  Source/.../Private/VTCCollectibleFeedComponent.cpp   replicated server->owning-client list
-  Content/Materials/M_VTCOutline       post-process outline material
-  Content/Materials/MPC_VTCColors      per-category colour / thickness parameters
-  Content/ViewThroughCollectibles_Config          SML ModConfiguration (the in-game menu)
-  Content/RootGameInstance_ViewThroughCollectibles GameInstanceModule (registers the config)
-docs/FINDINGS.md                     verified FactoryGame API + asset paths
-docs/CONTENT-ASSETS.md               exact build spec for M_VTCOutline / MPC_VTCColors / config assets
-docs/SETUP.md                        toolchain + integration walkthrough
-```
-
-`Binaries/`, `Intermediate/`, `Saved/` appear in `mod/ViewThroughCollectibles/` once it's
-built through the SML checkout; they're gitignored.
-
-## Building it
-
-Requires Satisfactory's account-gated C++ toolchain. Full walkthrough in
-[docs/SETUP.md](docs/SETUP.md); asset specs in [docs/CONTENT-ASSETS.md](docs/CONTENT-ASSETS.md).
-Short version:
-
-1. Set up the toolchain and a `SatisfactoryModLoader` checkout (docs.ficsit.app) — custom
-   engine `5.6.1-CSS`, VS 2022 with **MSVC v14.38 x64/x86**, Wwise 2023.1.14.8770.
-2. Junction this repo's `mod/ViewThroughCollectibles/` into the checkout at
-   `Mods/GameFeatures/ViewThroughCollectibles/` (it's the whole plugin — source *and* the
-   four `Content/` assets; nothing to scaffold). See [docs/SETUP.md](docs/SETUP.md) Phase C.
-3. Regenerate VS project files, build the **FactoryEditor / Development / Win64** target.
-4. In Alpakit, disable the server targets (client-only mod — see below), point "Copy to
-   Game Path" at your Satisfactory install, **Alpakit Selected**, test.
-
-A few `TODO(verify …)` items remain — flora descriptor names, power-slug mesh type, the
-outline material's behaviour on a live scene — confirmable only in the editor / in-game.
-
-## Verifying
-
-No local build without the toolchain. Once it builds:
-
-1. **Config** — the settings widget shows every type + distance / thickness / fill.
-2. **Singleplayer** — near a crash site: pods / slugs / sloops within the distance get a
-   coloured see-through outline; walking past the distance drops them within one refresh;
-   toggling a type off or changing its colour updates live. Drop an item → it outlines (if
-   Dropped Items is enabled).
-3. **Multiplayer** — host + a second client: each client follows its own config and
-   position; no replication warnings; quitting leaves no residual actors, save unchanged.
-   Joining a server without the mod succeeds (client-only) and outlines still work for you.
-4. **Perf** — in a slug-dense area, confirm frame time is fine at the default
-   `MaxSimultaneousOutlines`; lower it if not.
-
-## Open verification items
-
-Not design problems — things only confirmable in the editor / in-game, marked
-`TODO(verify …)` in the source / docs:
-
-- Flora descriptor → in-game-name mapping (`Desc_Berry` folder ≠ Beryl Nut necessarily).
-- Whether world power slugs use regular `UMeshComponent`s (Custom Depth won't apply to
-  abstract-instanced meshes — check `BP_Crystal`).
-- SML `UConfigManager::FillConfigurationStruct` call shape vs the generated accessor.
-- `M_VTCOutline` compiling and reading stencil correctly once applied to a live scene
-  (the SceneTexture ids 1/13/14/25 are confirmed against `MaterialTemplate.ush`).
-
-## For players
-
-Install from [ficsit.app](https://ficsit.app); usage and configuration are in
-[docs/USAGE.md](docs/USAGE.md).
-
-## Credits
-
-Designed and implemented with Claude Sonnet 5 by Anthropic.
+The plugin lives in `mod/ViewThroughCollectibles`. Discovery and nearest-N selection
+are separate from local presentation and from the optional server feed. Content assets
+are committed; generated binaries and intermediate files are ignored.
 
 ## License
 

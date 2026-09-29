@@ -2,155 +2,94 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
-#include "VTCTypes.h"
 #include "VTCConfig.h"
 #include "VTCCategoryTables.h"
+#include "VTCSelection.h"
+#include "VTCCollectionState.h"
 #include "VTCOutlineSubsystem.generated.h"
 
-class AActor;
 class APostProcessVolume;
-class UMaterialInterface;
 class UMaterialInstanceDynamic;
 class UMaterialParameterCollection;
 class UStaticMesh;
 class UTexture2D;
-class UFGActorRepresentation;
+class UMeshComponent;
+class UVTCCollectibleFeedComponent;
+class UVTCMapRepresentation;
 
-namespace VTC
-{
-	/** Custom Depth stencil values used by this mod are StencilBase + category + 1 (201..210). */
-	inline constexpr int32 StencilBase = 200;
-}
-
-/**
- * Client-side, cosmetic-only subsystem.
- *
- * Draws a coloured, see-through silhouette on nearby collectibles by:
- *  - writing a per-category Custom Depth stencil value onto each collectible's mesh, and
- *  - blending a post-process material (M_VTCOutline) that turns those stencil values into
- *    outlines, with colours fed from a Material Parameter Collection (MPC_VTCColors).
- *
- * Collectibles within MaxDistanceMeters that aren't streamed in get a small see-through
- * marker sphere instead (invisible except in the outline pass). Their positions come from
- * the local AFGScannableSubsystem registry when we're the authority (solo / listen host),
- * or from a replicated UVTCCollectibleFeedComponent when we're a remote client and the
- * server also has the mod.
- *
- * Multiplayer: never runs on a dedicated server, never spawns/replicates a gameplay actor
- * (the post-process volume and marker spheres are transient and client-local), never
- * writes the save. Reads only already-replicated data. Fully independent per client.
- */
+/** Local presentation of one identity-based selection, shared by outlines, markers and map. */
 UCLASS()
 class VIEWTHROUGHCOLLECTIBLES_API UVTCOutlineSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
-
 public:
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 	virtual void Deinitialize() override;
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
+	bool OwnsMapMarkerId(const FGuid& Id) const { return KnownMapMarkerIds.Contains(Id); }
 
 private:
+	friend class FVTCPresentationTest;
 	void SetupPostProcess();
 	void RefreshOutlines();
-
-	/** Push colours / thickness / fill from config into MPC_VTCColors (skips if unchanged). */
 	void PushConfigToMaterial(const FVTCConfigStruct& Cfg);
+	void LogConfigIfChanged(const FVTCConfigStruct& Cfg);
 
-	/** Enable/disable Custom Depth + set the stencil value on every mesh component of Actor. */
-	static void ApplyCustomDepth(AActor* Actor, int32 StencilValue, bool bEnable);
-
+	bool ApplyCustomDepth(AActor* Actor, int32 Stencil, TSet<TWeakObjectPtr<UMeshComponent>>& Wanted);
+	void ReleaseUnusedMeshes(const TSet<TWeakObjectPtr<UMeshComponent>>& Wanted);
 	void ClearAllTrackedOutlines();
-
-	/** Distant collectibles -> transient marker spheres. Sourced from RegistryNearby when
-	 *  bHaveRegistry (authority), else from the replicated feed component (remote client). */
-	void RefreshRemoteMarkers(const FVTCConfigStruct& Cfg, const FVector& PlayerLoc,
-		const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines,
-		const TArray<FVTCFedCollectible>& RegistryNearby, bool bHaveRegistry);
+	void RefreshRemoteMarkers(const TArray<FVTCCandidate>& Selected);
 	void ClearRemoteMarkers();
-
-	/** Category-coloured map/compass dots for everything currently outlined or markered. */
-	void RefreshMapDots(const FVTCConfigStruct& Cfg,
-		const TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory>& LoadedOutlines);
+	void RefreshMapDots(const FVTCConfigStruct& Cfg, const TArray<FVTCCandidate>& Selected);
 	void ClearMapDots();
-	UTexture2D* EnsureDotTexture();
 
-	static int32 StencilFor(EVTCCollectibleCategory Category)
-	{
-		return VTC::StencilBase + static_cast<int32>(Category) + 1;
-	}
+	static int32 StencilFor(uint8 Category) { return 201 + Category; }
 
 	UPROPERTY(Transient)
 	TObjectPtr<APostProcessVolume> PostProcessVolume;
-
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialInstanceDynamic> OutlineMID;
-
 	UPROPERTY(Transient)
 	TObjectPtr<UMaterialParameterCollection> ColorCollection;
-
-	FTimerHandle RefreshTimerHandle;
-	/** Interval the refresh timer is currently armed at; re-armed from config when it changes. */
-	float ArmedRefreshInterval = -1.f;
-
-	/** Actor -> category currently written into Custom Depth. */
-	TMap<TWeakObjectPtr<AActor>, EVTCCollectibleCategory> TrackedOutlines;
-
-	/**
-	 * Quantised world position -> the transient marker sphere placed there for a distant
-	 * collectible, plus its location/category (for the map dots). Not a UPROPERTY (uint64
-	 * keys aren't UHT-supported); the world owns the marker actors, we only weak-reference.
-	 */
-	struct FTrackedMarker
-	{
-		TWeakObjectPtr<AActor> Actor;
-		FVector Location = FVector::ZeroVector;
-		EVTCCollectibleCategory Category = EVTCCollectibleCategory::HardDrivePod;
-
-		FTrackedMarker() = default;
-		FTrackedMarker(AActor* InActor, const FVector& InLoc, EVTCCollectibleCategory InCat)
-			: Actor(InActor), Location(InLoc), Category(InCat) {}
-	};
-	TMap<uint64, FTrackedMarker> RemoteMarkers;
-
-	/** Quantised world position -> the local map representation registered for that dot. */
-	TMap<uint64, TWeakObjectPtr<UFGActorRepresentation>> MapDots;
-
 	UPROPERTY(Transient)
 	TObjectPtr<UStaticMesh> MarkerMesh;
-
 	UPROPERTY(Transient)
 	TObjectPtr<UTexture2D> DotTexture;
-	bool bDotTextureLoadLogged = false;
-	bool bMapDotDiagLogged = false;
-	int32 LastSourceSig = -1;
 
-	/** Last Max Distance/Max Simultaneous reported to the server's feed component, so we only
-	 *  re-send Server_ReportRangePreference when they actually change. */
-	float LastReportedMaxDistanceCm = -1.f;
-	int32 LastReportedMaxEntries = -1;
-
+	FTimerHandle RefreshTimerHandle;
+	float ArmedRefreshInterval = -1.f;
 	FVTCCategoryTables Tables;
+	TMap<TWeakObjectPtr<AActor>, FGuid> RuntimeIds;
+	FVTCCollectionState CollectionState;
 
-	/** Last values pushed to the MPC, to avoid redundant per-tick writes. */
+	struct FMeshState
+	{
+		bool OriginalEnabled = false;
+		int32 OriginalStencil = 0;
+		uint8 OriginalWriteMask = 0;
+		int32 AppliedStencil = 0;
+		bool StillOwned(const UMeshComponent* Mesh) const;
+		void Restore(UMeshComponent* Mesh) const;
+	};
+	TMap<TWeakObjectPtr<UMeshComponent>, FMeshState> MeshStates;
+	TMap<FGuid, TWeakObjectPtr<AActor>> RemoteMarkers;
+	TMap<FGuid, TWeakObjectPtr<UVTCMapRepresentation>> MapDots;
+	// Retain removed IDs until world teardown so a stale popup cannot save them
+	// as shared markers after collection or a config change.
+	TSet<FGuid> KnownMapMarkerIds;
+	bool bMarkerMeshAttempted = false;
+	bool bDotTextureAttempted = false;
+
+	TWeakObjectPtr<UVTCCollectibleFeedComponent> ReportedFeed;
+	FVTCFeedPreferences LastReportedPreferences;
+	uint32 RequestRevision = 0;
+
 	FVTCConfigStruct LastPushedConfig;
 	bool bConfigEverPushed = false;
-
-	/** Log the effective config once, and again whenever it changes, so binding is verifiable. */
-	void LogConfigIfChanged(const FVTCConfigStruct& Cfg);
 	FString LastLoggedConfigDigest;
 
-	/**
-	 * We force r.CustomDepthTemporalAAJitter to 0 while active so the outline stops
-	 * shimmering (the Custom Depth pass otherwise inherits the TSR/TAA sub-pixel jitter).
-	 * This holds the value to restore on Deinitialize; INT_MIN means "never changed it".
-	 */
-	int32 SavedCustomDepthJitter = MIN_int32;
+	bool bOwnsJitterOverride = false;
 	void ApplyCustomDepthJitterOverride();
 	void RestoreCustomDepthJitterOverride();
-
-	// Content asset paths (mount point is /<ModReference>/). Adjust if you move the assets.
-	static const TCHAR* OutlineMaterialPath;
-	static const TCHAR* ColorCollectionPath;
 };

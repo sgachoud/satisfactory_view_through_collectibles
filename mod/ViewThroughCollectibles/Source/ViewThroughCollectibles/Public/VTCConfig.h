@@ -33,7 +33,7 @@ struct VIEWTHROUGHCOLLECTIBLES_API FVTCConfigStruct
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
 	float OccludedFillOpacity = 0.12f;
 
-	/** Also drop a category-coloured dot on the map and compass for every active outline/marker. */
+	/** Adds category-coloured map dots; only highlighted dots appear on the compass. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Appearance")
 	bool ShowOnMap = false;
 
@@ -70,12 +70,14 @@ struct VIEWTHROUGHCOLLECTIBLES_API FVTCConfigStruct
 	/** Returns the settings block for a category. */
 	const FVTCTypeSettings& GetFor(EVTCCollectibleCategory Category) const;
 
-	// Sanitised accessors — guard only against values that would break things: a timer
-	// interval below ~0.1 s would run the whole scan every frame and hang the game; a
-	// distance or count can't be negative. No upper limits.
-	float SafeRefreshIntervalSeconds() const { return FMath::Max(0.1f, RefreshIntervalSeconds); }
-	double MaxDistanceCm() const { return FMath::Max(0.f, MaxDistanceMeters) * 100.0; }
+	// Effective settings shared by local selection and server queries. Reject non-finite
+	// values, clamp negatives, and keep the minimum refresh at 0.1 s. No hidden upper cap.
+	float SafeRefreshIntervalSeconds() const { return FMath::IsFinite(RefreshIntervalSeconds) ? FMath::Max(0.1f, RefreshIntervalSeconds) : 0.4f; }
+	double MaxDistanceCm() const { return FMath::IsFinite(MaxDistanceMeters) ? FMath::Max(0.f, MaxDistanceMeters) * 100.0 : 0.0; }
 	int32 SafeMaxSimultaneous() const { return FMath::Max(0, MaxSimultaneousOutlines); }
+	float SafeThickness() const { return FMath::IsFinite(OutlineThicknessPixels) ? FMath::Max(1.f, OutlineThicknessPixels) : 2.f; }
+	float SafeFillOpacity() const { return FMath::IsFinite(OccludedFillOpacity) ? FMath::Clamp(OccludedFillOpacity, 0.f, 1.f) : 0.12f; }
+	FVTCFeedPreferences FeedPreferences() const;
 
 	/** Reads the live SML configuration into a struct. Safe to call every refresh tick. */
 	static FVTCConfigStruct GetActiveConfig(const UObject* WorldContext);

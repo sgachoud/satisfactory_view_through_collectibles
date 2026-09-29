@@ -1,20 +1,21 @@
 # Content assets to build in the editor
 
-The C++ subsystem expects four assets in the mod's Content folder (mount point
-`/ViewThroughCollectibles/`). Build them once in the Unreal editor, compile + save, and
+The C++ subsystem uses the following assets in the mod's Content folder (mount point
+`/ViewThroughCollectibles/`). They are already committed. To rebuild them in the Unreal editor, compile + save, and
 they get packaged by Alpakit.
 
 ```
 /ViewThroughCollectibles/
   Materials/MPC_VTCColors            Material Parameter Collection
   Materials/M_VTCOutline             Post Process material (uses MPC_VTCColors)
-  Config/ViewThroughCollectibles_Config          ModConfiguration (SML)
+  ViewThroughCollectibles_Config          ModConfiguration (SML)
   RootGameInstance_ViewThroughCollectibles       GameInstanceModule (registers the config)
+  Textures/T_VTCDot                              Map/compass icon texture
 ```
 
 Paths matter — `VTCOutlineSubsystem.cpp` hard-codes
 `/ViewThroughCollectibles/Materials/M_VTCOutline` and `.../MPC_VTCColors`. If you put them
-elsewhere, update `OutlineMaterialPath` / `ColorCollectionPath` at the top of that file.
+elsewhere, update `SetupPostProcess()`.
 
 ---
 
@@ -45,7 +46,7 @@ value (`200 + category index + 1`):
 | `Color209` | Bacon Agaric | `0.90, 0.55, 0.35, 1` |
 | `Color210` | Dropped Items | `0.95, 0.95, 0.95, 1` |
 
-The subsystem overwrites all of these from the mod config every refresh; the defaults only
+The subsystem updates these values when appearance settings change; the defaults only
 matter before the first push. **Alpha channel**: the subsystem sets `A = 0` for a disabled
 category (the material treats alpha 0 as "draw nothing"), and `A = colour alpha` otherwise.
 
@@ -154,7 +155,7 @@ SceneTexture ids (confirmed in `Engine/Shaders/Private/MaterialTemplate.ush` for
 
 ## 3. `ViewThroughCollectibles_Config` — ModConfiguration
 
-Follow `docs/SETUP.md` Phase D. The schema must mirror `FVTCConfigStruct` field-for-field
+See the content/config section in `docs/SETUP.md`. The schema must mirror `FVTCConfigStruct` field-for-field
 (the subsystem reads by name):
 
 - `MaxDistanceMeters` float, `RefreshIntervalSeconds` float, `MaxSimultaneousOutlines` int

@@ -5,53 +5,46 @@
 #include "VTCTypes.h"
 #include "VTCCollectibleFeedComponent.generated.h"
 
-/**
- * Server <-> owning-client channel for nearby collectibles the client probably hasn't
- * streamed in. The server's UVTCServerFeedSubsystem adds one of these to each
- * APlayerController and refreshes its list; it replicates only to that player's client
- * (a PlayerController is relevant to its owner alone). The client's UVTCOutlineSubsystem
- * reads it to place see-through markers.
- *
- * The range that feed should cover is the CLIENT's own Max Distance / Max Simultaneous
- * setting, not the server's — each machine has its own copy of the mod's config, and the
- * server has no other way to know what a given player asked to see. So this also carries a
- * client -> server report of that preference, which UVTCServerFeedSubsystem reads when
- * building this player's feed (falling back to its own local config until the first report
- * arrives, e.g. right after connecting).
- *
- * If the server doesn't have the mod, this component never exists on the client and the
- * outline subsystem simply skips markers.
- */
+/** Owner-only, acknowledged pages keep large client selections below network bunch limits. */
 UCLASS(ClassGroup = (Custom), NotBlueprintable)
 class VIEWTHROUGHCOLLECTIBLES_API UVTCCollectibleFeedComponent : public UActorComponent
 {
 	GENERATED_BODY()
-
 public:
 	UVTCCollectibleFeedComponent();
-
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	/** Server: replace the fed list (no-op if unchanged, to avoid needless replication). */
-	void SetFeed(TArray<FVTCFedCollectible>&& NewFeed);
-
-	/** Client: the current list. */
-	const TArray<FVTCFedCollectible>& GetFeed() const { return Feed; }
-
-	/** Client -> server: this player's own Max Distance (cm) / Max Simultaneous Outlines,
-	 *  so their feed covers what THEY asked for rather than the server's local default. */
+	void RequestPreferences(const FVTCFeedPreferences& Preferences, uint32 Revision);
 	UFUNCTION(Server, Reliable)
-	void Server_ReportRangePreference(float InMaxDistanceCm, int32 InMaxEntries);
+	void Server_ReportPreferences(FVTCFeedPreferences Preferences, uint32 Revision);
+	UFUNCTION(Server, Reliable)
+	void Server_AcknowledgePage(uint32 Revision, uint32 Serial, int32 PageIndex);
 
-	/** Server-side only. Negative/zero means "not reported yet" - callers should fall back
-	 *  to their own local config default in that case. Never replicated back down. */
-	float GetDesiredMaxDistanceCm() const { return DesiredMaxDistanceCm; }
-	int32 GetDesiredMaxEntries() const { return DesiredMaxEntries; }
+	const FVTCFeedSnapshot& GetSnapshot() const { return Snapshot; }
+	const FVTCFeedPreferences& GetPreferences() const { return RequestedPreferences; }
+	bool IsRefreshDue(double Now) const { return RequestRevision != 0 && !bSending && Now >= NextRefreshTime; }
+	void SetFeed(TArray<FVTCFedCollectible>&& Entries, double Now);
 
 private:
-	UPROPERTY(Replicated)
-	TArray<FVTCFedCollectible> Feed;
+	friend class FVTCPreferencesTest;
+	UPROPERTY(ReplicatedUsing = OnRep_Page)
+	FVTCFeedPage Page;
+	UFUNCTION()
+	void OnRep_Page();
+	void SendPage(int32 Index);
+	void ForceOwnerUpdate();
 
-	float DesiredMaxDistanceCm = -1.f;
-	int32 DesiredMaxEntries = -1;
+	FVTCFeedSnapshot Snapshot;
+	FVTCFeedPreferences RequestedPreferences;
+	uint32 RequestRevision = 0;
+	double NextRefreshTime = 0.0;
+	bool bSending = false;
+	uint32 LastSentRevision = 0;
+	TArray<FVTCFedCollectible> SendingEntries;
+
+	uint32 ExpectedRevision = 0;
+	uint32 ReceivingSerial = 0;
+	int32 NextPageIndex = 0;
+	TArray<FVTCFedCollectible> ReceivingEntries;
+	static constexpr int32 EntriesPerPage = 128;
 };
